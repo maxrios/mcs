@@ -12,6 +12,7 @@ pub enum Message {
     Chat(String),
     Join(String),
     Heartbeat,
+    Error(String),
 }
 
 impl Decoder for McsCodec {
@@ -42,6 +43,14 @@ impl Decoder for McsCodec {
                 let s = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
                 Ok(Option::from(Message::Chat(s)))
             }
+            2 => {
+                let s = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
+                Ok(Option::from(Message::Join(s)))
+            }
+            3 => {
+                let s = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
+                Ok(Option::from(Message::Error(s)))
+            }
             _ => Err(Error::new(InvalidData, "Unknown type")),
         }
     }
@@ -62,6 +71,12 @@ impl Encoder<Message> for McsCodec {
                 let payload = username.as_bytes();
                 dst.put_u8(0x02);
                 dst.put_u32(username.len() as u32);
+                dst.extend_from_slice(payload);
+            }
+            Message::Error(text) => {
+                let payload = text.as_bytes();
+                dst.put_u8(0x03);
+                dst.put_u32(text.len() as u32);
                 dst.extend_from_slice(payload);
             }
             Message::Heartbeat => {}
