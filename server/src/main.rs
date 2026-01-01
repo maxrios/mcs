@@ -28,11 +28,12 @@ async fn main() {
 
             let framed_writer = FramedWrite::new(writer, McsCodec);
             let mut framed_reader = FramedRead::new(reader, McsCodec);
+            let boxed_writer = Box::pin(framed_writer);
 
             if let Some(Ok(Message::Join(name))) = framed_reader.next().await {
-                if server_ref.register_user(&name, framed_writer).await.is_ok() {
+                if server_ref.register_user(&name, boxed_writer).await.is_ok() {
                     server_ref
-                        .broadcast("server", format!("{} joined.\n", name), None)
+                        .broadcast("server", format!("{} joined.\n", name))
                         .await;
 
                     handle_session(&name, framed_reader, server_ref).await;
@@ -49,7 +50,7 @@ async fn handle_session(
 ) {
     while let Some(Ok(msg)) = reader.next().await {
         match msg {
-            Message::Chat(text) => server.broadcast(&name, format!("{}\n", text), None).await,
+            Message::Chat(text) => server.broadcast(&name, format!("{}\n", text)).await,
             Message::Heartbeat => {
                 if !server.heartbeat(&name).await {
                     break;
@@ -60,6 +61,6 @@ async fn handle_session(
     }
     server.remove_user(&name).await;
     server
-        .broadcast("server", format!("{} left.\n", name), None)
+        .broadcast("server", format!("{} left.\n", name))
         .await;
 }

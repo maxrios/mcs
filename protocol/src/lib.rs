@@ -97,7 +97,7 @@ mod tests {
     use tokio_util::codec::{Decoder, Encoder};
 
     #[test]
-    fn test_encode_decode_cycle() {
+    fn encode_decode_cycle_succeeds() {
         let mut buf = BytesMut::new();
         let original_msg_text = "Some Message";
         let original_msg = Message::Chat(original_msg_text.to_string());
@@ -116,7 +116,7 @@ mod tests {
     }
 
     #[test]
-    fn test_partial_packet_decoding() {
+    fn partial_packet_decoding_succeeds() {
         let mut buf = BytesMut::new();
         buf.extend_from_slice(&[0x01, 0x00, 0x00]);
 
@@ -137,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_messages_in_buffer() {
+    fn multiple_messages_in_buffer_succeeds() {
         let mut buf = BytesMut::new();
 
         McsCodec
