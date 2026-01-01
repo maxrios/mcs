@@ -138,10 +138,18 @@ impl ChatServer {
 
 #[cfg(test)]
 mod test {
-    use std::io::{Error, ErrorKind};
+    use std::{
+        io::{Error, ErrorKind},
+        sync::Arc,
+        time::Duration,
+    };
 
     use futures::{SinkExt, StreamExt, channel::mpsc};
     use protocol::Message;
+    use tokio::{
+        task::yield_now,
+        time::{advance, pause},
+    };
 
     use crate::state::{ChatServer, MessageWriter};
 
@@ -204,5 +212,64 @@ mod test {
         let result = server.register_user("user_1", writer_user_2).await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn remove_user_succeeds() {
+        let server = ChatServer::new("server");
+        let (writer_user_1, _) = create_mock_client();
+        let (writer_user_2, _) = create_mock_client();
+
+        let _ = server.register_user("user_1", writer_user_1).await;
+        server.remove_user("user_1").await;
+        let result = server.register_user("user_1", writer_user_2).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn heartbeat_succeeds() {
+        let server = ChatServer::new("server");
+        let (writer_user_1, _) = create_mock_client();
+
+        let _ = server.register_user("user_1", writer_user_1).await;
+        let last_seen_first = if let Some(user) = server.active_users.read().await.get("user_1") {
+            user.last_seen
+        } else {
+            panic!("user not found")
+        };
+
+        assert!(server.heartbeat("user_1").await);
+
+        let last_seen_second = if let Some(user) = server.active_users.read().await.get("user_1") {
+            user.last_seen
+        } else {
+            panic!("user not found")
+        };
+
+        assert_ne!(last_seen_first, last_seen_second);
+    }
+
+    #[tokio::test]
+    async fn spawn_reaper_succeeds() {
+        pause();
+
+        let server = Arc::new(ChatServer::new("server"));
+        let (writer, _) = create_mock_client();
+        let _ = server.register_user("user_1", writer).await;
+
+        server.clone().spawn_reaper();
+        advance(Duration::from_secs(20)).await;
+        yield_now().await;
+
+        assert!(server.active_users.read().await.contains_key("user_1"));
+
+        advance(Duration::from_secs(11)).await;
+        yield_now().await;
+
+        assert!(
+            !server.active_users.read().await.contains_key("user_1"),
+            "user shoud have been reaped"
+        );
     }
 }
