@@ -52,7 +52,7 @@ impl ChatServer {
         let mut users = self.active_users.write().await;
         let some_excluded_users = excluded_users.unwrap_or_else(|| Vec::new());
         for (name, user) in users.iter_mut() {
-            if name == sender || some_excluded_users.contains(&name) {
+            if some_excluded_users.contains(&name) {
                 continue;
             }
             // TODO: Make this async
@@ -78,8 +78,10 @@ impl ChatServer {
             .send(Message::Chat(format!("Connected to {}", self.host)))
             .await;
 
-        let history = self.chat_history.read().await.join("");
-        let _ = writer.send(Message::Chat(history.clone())).await;
+        let history = self.chat_history.read().await;
+        for msg in history.iter() {
+            let _ = writer.send(Message::Chat(msg.clone())).await;
+        }
 
         users.insert(
             name.into(),
@@ -100,7 +102,7 @@ impl ChatServer {
     pub async fn heartbeat(&self, name: &str) {
         let mut users = self.active_users.write().await;
         if let Some(u) = users.get_mut(name) {
-            u.last_seen = tokio::time::Instant::now();
+            u.last_seen = Instant::now();
         }
     }
 

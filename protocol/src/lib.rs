@@ -47,7 +47,8 @@ impl Decoder for McsCodec {
                 let s = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
                 Ok(Option::from(Message::Join(s)))
             }
-            3 => {
+            3 => Ok(Option::from(Message::Heartbeat)),
+            4 => {
                 let s = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
                 Ok(Option::from(Message::Error(s)))
             }
@@ -73,13 +74,16 @@ impl Encoder<Message> for McsCodec {
                 dst.put_u32(username.len() as u32);
                 dst.extend_from_slice(payload);
             }
+            Message::Heartbeat => {
+                dst.put_u8(0x03);
+                dst.put_u32(0u32);
+            }
             Message::Error(text) => {
                 let payload = text.as_bytes();
-                dst.put_u8(0x03);
+                dst.put_u8(0x04);
                 dst.put_u32(text.len() as u32);
                 dst.extend_from_slice(payload);
             }
-            Message::Heartbeat => {}
         }
         Ok(())
     }

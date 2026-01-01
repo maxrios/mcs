@@ -32,7 +32,7 @@ async fn main() {
             if let Some(Ok(Message::Join(name))) = framed_reader.next().await {
                 if server_ref.register_user(&name, framed_writer).await.is_ok() {
                     server_ref
-                        .broadcast("server", format!("{} joined.\n", name), Some(vec![&name]))
+                        .broadcast("server", format!("{} joined.\n", name), None)
                         .await;
 
                     handle_session(&name, framed_reader, server_ref).await;
@@ -49,17 +49,13 @@ async fn handle_session(
 ) {
     while let Some(Ok(msg)) = reader.next().await {
         match msg {
-            Message::Chat(text) => server.broadcast(&name, text, None).await,
+            Message::Chat(text) => server.broadcast(&name, format!("{}\n", text), None).await,
             Message::Heartbeat => server.heartbeat(&name).await,
             _ => {}
         }
     }
     server.remove_user(&name).await;
     server
-        .broadcast(
-            "server",
-            format!("{} left.\n", name),
-            Some(vec![&name.to_string()]),
-        )
+        .broadcast("server", format!("{} left.\n", name), None)
         .await;
 }

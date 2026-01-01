@@ -1,108 +1,146 @@
-use std::{env, io::Write};
-
+use crossterm::{
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+};
 use futures::{SinkExt, StreamExt};
 use protocol::{McsCodec, Message};
-use tokio::{
-    io::{self, AsyncBufReadExt, BufReader},
-    net::{
-        TcpStream,
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
-    },
-};
-use tokio_util::codec::{FramedRead, FramedWrite};
+use ratatui::{Terminal, backend::CrosstermBackend};
+use std::{error::Error, io, time::Duration};
+use tokio::{net::TcpStream, sync::mpsc, time::interval};
+use tokio_util::codec::FramedRead;
+
+mod app;
+mod state;
+use app::ChatApp;
+use state::ChatClient;
+
+/// Events coming from the network to be displayed in the TUI
+enum ChatEvent {
+    MessageReceived(String),
+    SystemMessage(String),
+    Error(String),
+}
 
 #[tokio::main]
-async fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        println!("forgot to include a username");
-        return;
-    }
-
-    let user = &args[1];
+async fn main() -> Result<(), Box<dyn Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    let username = match args.get(1) {
+        Some(u) => u.clone(),
+        None => {
+            eprintln!("Usage: chat <username>");
+            return Ok(());
+        }
+    };
 
     let stream = match TcpStream::connect("127.0.0.1:64400").await {
         Ok(res) => res,
-        Err(..) => {
-            println!("couldn't connect to server");
-            return;
+        Err(_) => {
+            eprintln!("Error: Could not connect to server at 127.0.0.1:64400");
+            return Ok(());
         }
     };
 
     let (reader, writer) = stream.into_split();
-
-    let mut framed_writer = FramedWrite::new(writer, McsCodec);
     let mut framed_reader = FramedRead::new(reader, McsCodec);
+    let (ui_tx, mut network_rx) = mpsc::unbounded_channel::<String>();
+    let (network_tx, mut ui_rx) = mpsc::unbounded_channel::<ChatEvent>();
 
-    match framed_writer.send(Message::Join(user.into())).await {
-        Ok(_) => match framed_reader.next().await {
-            Some(Ok(Message::Chat(msg))) => println!("{}", msg),
-            Some(Ok(Message::Error(msg))) => {
-                println!("{}", msg);
-                return;
-            }
-            _ => {
-                return;
-            }
-        },
-        _ => {
-            return;
-        }
-    }
+    let mut client = ChatClient::new(writer, username);
+    client.connect(&mut framed_reader).await;
 
+    let net_notifier = network_tx.clone();
     tokio::spawn(async move {
-        read_messages(framed_reader).await;
+        let mut heartbeat_timer = interval(Duration::from_secs(10));
+
+        loop {
+            tokio::select! {
+                result = framed_reader.next() => {
+                    match result {
+                        Some(Ok(Message::Chat(text))) => {
+                            let _ = net_notifier.send(ChatEvent::MessageReceived(text));
+                        }
+                        Some(Ok(Message::Error(err))) => {
+                            let _ = net_notifier.send(ChatEvent::Error(format!("Server Error: {}", err)));
+                        }
+                        None => {
+                            let _ = net_notifier.send(ChatEvent::SystemMessage("Connection closed by server.".to_string()));
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                Some(msg_text) = network_rx.recv() => {
+                    if let Err(e) = client.writer.send(Message::Chat(msg_text)).await {
+                        let _ = net_notifier.send(ChatEvent::Error(format!("Failed to send message: {}", e)));
+                    }
+                }
+                _ = heartbeat_timer.tick() => {
+                    if let Err(e) = client.writer.send(Message::Heartbeat).await {
+                            let _ = net_notifier.send(ChatEvent::Error(format!("Heartbeat failed: {}", e)));
+                    }
+                }
+            }
+        }
     });
 
-    send_messages(framed_writer).await;
-}
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let term_backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(term_backend)?;
 
-async fn read_messages(mut reader: FramedRead<OwnedReadHalf, McsCodec>) {
-    while let Some(result) = reader.next().await {
-        match result {
-            Ok(Message::Chat(msg)) => {
-                print!("\r\x1b[2K{}Me: ", msg);
-                std::io::stdout().flush().unwrap();
-            }
-            Ok(Message::Error(msg)) => {
-                print!("\r\x1b[2K{}", msg);
-                return;
-            }
-            Err(e) => {
-                println!("\nDisconnected from server: {:?}", e);
-                break;
-            }
-            _ => {}
-        }
-    }
-}
-
-async fn send_messages(mut writer: FramedWrite<OwnedWriteHalf, McsCodec>) {
-    let mut stdin_reader = BufReader::new(io::stdin());
-    let mut input_string = String::new();
+    let mut app = ChatApp::new(ui_tx);
 
     loop {
-        print!("Me: ");
-        std::io::stdout().flush().unwrap();
-        input_string.clear();
+        terminal.draw(|f| app.update_ui(f))?;
 
-        if let Err(e) = stdin_reader.read_line(&mut input_string).await {
-            println!("failed to read from stdin: {:?}", e);
-            break;
+        while let Ok(event) = ui_rx.try_recv() {
+            match event {
+                ChatEvent::MessageReceived(msg) => {
+                    app.messages.push(msg);
+                    app.scroll = app.scroll.saturating_add(1);
+                }
+                ChatEvent::SystemMessage(msg) => {
+                    app.messages.push(format!("*** {} ***", msg));
+                    app.scroll = app.scroll.saturating_add(1);
+                }
+                ChatEvent::Error(err) => app.messages.push(format!("ERROR: {}", err)),
+            }
         }
 
-        let trimmed = input_string.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        if trimmed == "!quit" {
-            break;
-        }
-
-        if let Err(e) = writer.send(Message::Chat(input_string.to_string())).await {
-            println!("Failed to send message: {:?}", e);
-            break;
+        if event::poll(Duration::from_millis(50))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Enter => app.submit_message(),
+                        KeyCode::Char(c) => app.input.push(c),
+                        KeyCode::Backspace => {
+                            app.input.pop();
+                        }
+                        KeyCode::Up => {
+                            app.scroll = app.scroll.saturating_sub(1);
+                        }
+                        KeyCode::Down => {
+                            if app.scroll < app.scroll_limit {
+                                app.scroll = app.scroll.saturating_add(1);
+                            }
+                        }
+                        KeyCode::Esc => break,
+                        _ => {}
+                    }
+                }
+            }
         }
     }
+
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    Ok(())
 }
