@@ -50,7 +50,11 @@ async fn handle_session(
     while let Some(Ok(msg)) = reader.next().await {
         match msg {
             Message::Chat(text) => server.broadcast(&name, format!("{}\n", text), None).await,
-            Message::Heartbeat => server.heartbeat(&name).await,
+            Message::Heartbeat => {
+                if !server.heartbeat(&name).await {
+                    break;
+                }
+            }
             _ => {}
         }
     }

@@ -94,15 +94,18 @@ impl ChatServer {
         Ok(())
     }
 
-    pub async fn remove_user(&self, name: &str) {
+    pub async fn remove_user(&self, name: &str) -> Option<ConnectedUser> {
         let mut users = self.active_users.write().await;
-        users.remove(name);
+        users.remove(name)
     }
 
-    pub async fn heartbeat(&self, name: &str) {
+    pub async fn heartbeat(&self, name: &str) -> bool {
         let mut users = self.active_users.write().await;
         if let Some(u) = users.get_mut(name) {
             u.last_seen = Instant::now();
+            true
+        } else {
+            false
         }
     }
 
