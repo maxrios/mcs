@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use futures::SinkExt;
+use futures::{SinkExt, future::join_all};
 use protocol::{McsCodec, Message};
 use tokio::{
     net::tcp::OwnedWriteHalf,
@@ -50,14 +50,14 @@ impl ChatServer {
         io::stdout().flush().unwrap();
 
         let mut users = self.active_users.write().await;
-        let some_excluded_users = excluded_users.unwrap_or_else(|| Vec::new());
-        for (name, user) in users.iter_mut() {
-            if some_excluded_users.contains(&name) {
-                continue;
-            }
-            // TODO: Make this async
-            let _ = user.writer.send(Message::Chat(formatted.clone())).await;
-        }
+        let excluded = excluded_users.unwrap_or_else(|| Vec::new());
+
+        let broadcast_futures = users
+            .iter_mut()
+            .filter(|(name, _)| !excluded.contains(name))
+            .map(|(_, user)| user.writer.send(Message::Chat(formatted.clone())));
+
+        join_all(broadcast_futures).await;
     }
 
     pub async fn register_user(&self, name: &str, mut writer: MessageWriter) -> Result<(), String> {
