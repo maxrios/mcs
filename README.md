@@ -26,7 +26,9 @@ IP.1 = 127.0.0.1
 
 ### Step 2: Generate Keys and Certificates:
 ```bash
-cd tls
+
+
+mkdir tls && cd tls
 
 openssl genrsa -out ca.key 2048
 
