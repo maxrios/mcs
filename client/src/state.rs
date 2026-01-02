@@ -1,24 +1,27 @@
 use futures::{SinkExt, StreamExt};
 use protocol::{McsCodec, Message};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{FramedRead, FramedWrite};
 
-type MessageWriter = FramedWrite<OwnedWriteHalf, McsCodec>;
+type MessageWriter<W> = FramedWrite<W, McsCodec>;
 
-pub struct ChatClient {
-    pub writer: MessageWriter,
+pub struct ChatClient<W> {
+    pub writer: MessageWriter<W>,
     pub username: String,
 }
 
-impl ChatClient {
-    pub fn new(writer: OwnedWriteHalf, username: String) -> Self {
+impl<W: AsyncWrite + Unpin> ChatClient<W> {
+    pub fn new(writer: W, username: String) -> Self {
         Self {
             writer: FramedWrite::new(writer, McsCodec),
             username,
         }
     }
 
-    pub async fn connect(&mut self, reader: &mut FramedRead<OwnedReadHalf, McsCodec>) {
+    pub async fn connect<R>(&mut self, reader: &mut FramedRead<R, McsCodec>)
+    where
+        R: AsyncRead + Unpin,
+    {
         let _ = self.writer.send(Message::Join(self.username.clone())).await;
 
         match reader.next().await {

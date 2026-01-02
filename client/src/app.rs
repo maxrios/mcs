@@ -8,6 +8,7 @@ use ratatui::{
 use tokio::sync::mpsc;
 
 pub struct ChatApp {
+    pub username: String,
     pub input: String,
     pub messages: Vec<String>,
     pub network_tx: mpsc::UnboundedSender<String>,
@@ -16,8 +17,9 @@ pub struct ChatApp {
 }
 
 impl ChatApp {
-    pub fn new(network_tx: mpsc::UnboundedSender<String>) -> Self {
+    pub fn new(username: String, network_tx: mpsc::UnboundedSender<String>) -> Self {
         Self {
+            username,
             input: String::new(),
             messages: Vec::new(),
             network_tx,
@@ -74,7 +76,7 @@ impl ChatApp {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Chat History ")
+                    .title(format!(" Chat History - {} ", self.username))
                     .border_style(Style::default().fg(Color::Cyan)),
             )
             .wrap(Wrap { trim: false })

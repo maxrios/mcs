@@ -1,34 +1,34 @@
 use std::{
     collections::HashMap,
     io::{self, Write},
-    pin::Pin,
     sync::Arc,
     time::Duration,
 };
 
-use futures::{Sink, SinkExt, future::join_all};
-use protocol::Message;
+use futures::{SinkExt, future::join_all};
+use protocol::{McsCodec, Message};
 use tokio::{
+    io::AsyncWrite,
     sync::RwLock,
     time::{Instant, interval},
 };
+use tokio_util::codec::FramedWrite;
 
-pub type MessageWriter = Pin<Box<dyn Sink<Message, Error = std::io::Error> + Send + Sync + Unpin>>;
-type UserMap = Arc<RwLock<HashMap<String, ConnectedUser>>>;
+type UserMap<W> = Arc<RwLock<HashMap<String, ConnectedUser<W>>>>;
 type ChatVec = Arc<RwLock<Vec<String>>>;
 
-pub struct ConnectedUser {
-    pub writer: MessageWriter,
+pub struct ConnectedUser<W> {
+    pub writer: FramedWrite<W, McsCodec>,
     pub last_seen: Instant,
 }
 
-pub struct ChatServer {
+pub struct ChatServer<W> {
     host: String,
-    active_users: UserMap,
+    active_users: UserMap<W>,
     chat_history: ChatVec,
 }
 
-impl ChatServer {
+impl<W: AsyncWrite + Unpin + Send + Sync + 'static> ChatServer<W> {
     pub fn new(host: &str) -> Self {
         Self {
             host: host.to_string(),
@@ -57,33 +57,36 @@ impl ChatServer {
         join_all(broadcast_futures).await;
     }
 
-    pub async fn register_user(&self, name: &str, mut writer: MessageWriter) -> Result<(), String> {
+    pub async fn register_user(&self, name: &str, writer: W) -> Result<(), String> {
+        let mut framed_writer = FramedWrite::new(writer, McsCodec);
         let mut users = self.active_users.write().await;
 
         if name.len() < 3 {
-            let _ = writer
+            let _ = framed_writer
                 .send(Message::Error("Username too short".into()))
                 .await;
             return Err("Username too short".into());
         }
         if users.contains_key(name) {
-            let _ = writer.send(Message::Error("Username taken".into())).await;
+            let _ = framed_writer
+                .send(Message::Error("Username taken".into()))
+                .await;
             return Err("Username taken".into());
         }
 
-        let _ = writer
+        let _ = framed_writer
             .send(Message::Chat(format!("Connected to {}", self.host)))
             .await;
 
         let history = self.chat_history.read().await;
         for msg in history.iter() {
-            let _ = writer.send(Message::Chat(msg.clone())).await;
+            let _ = framed_writer.send(Message::Chat(msg.clone())).await;
         }
 
         users.insert(
             name.into(),
             ConnectedUser {
-                writer,
+                writer: framed_writer,
                 last_seen: Instant::now(),
             },
         );
@@ -91,7 +94,7 @@ impl ChatServer {
         Ok(())
     }
 
-    pub async fn remove_user(&self, name: &str) -> Option<ConnectedUser> {
+    pub async fn remove_user(&self, name: &str) -> Option<ConnectedUser<W>> {
         let mut users = self.active_users.write().await;
         users.remove(name)
     }
@@ -138,27 +141,25 @@ impl ChatServer {
 
 #[cfg(test)]
 mod test {
-    use std::{
-        io::{Error, ErrorKind},
-        sync::Arc,
-        time::Duration,
-    };
+    use std::{sync::Arc, time::Duration};
 
-    use futures::{SinkExt, StreamExt, channel::mpsc};
-    use protocol::Message;
+    use futures::StreamExt;
+    use protocol::{McsCodec, Message};
     use tokio::{
+        io::{DuplexStream, duplex},
         task::yield_now,
         time::{advance, pause},
     };
+    use tokio_util::codec::FramedRead;
 
-    use crate::state::{ChatServer, MessageWriter};
+    use crate::state::ChatServer;
 
-    fn create_mock_client() -> (MessageWriter, mpsc::UnboundedReceiver<Message>) {
-        let (tx, rx) = mpsc::unbounded::<Message>();
+    fn create_mock_client() -> (DuplexStream, FramedRead<DuplexStream, McsCodec>) {
+        let (client, server) = duplex(64);
 
-        let boxed_sink = Box::pin(tx.sink_map_err(|e| Error::new(ErrorKind::Other, e.to_string())));
+        let client_reader = FramedRead::new(client, McsCodec);
 
-        (boxed_sink, rx)
+        (server, client_reader)
     }
 
     #[tokio::test]
@@ -177,7 +178,7 @@ mod test {
         server.broadcast("user_1", "test".to_string()).await;
 
         match rx_user_2.next().await {
-            Some(Message::Chat(msg)) => assert_eq!(msg, "user_1: test"),
+            Some(Ok(Message::Chat(msg))) => assert_eq!(msg, "user_1: test"),
             _ => panic!("user_2 did not receive the expected broadcast"),
         }
     }

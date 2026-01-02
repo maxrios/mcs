@@ -6,8 +6,18 @@ use crossterm::{
 use futures::{SinkExt, StreamExt};
 use protocol::{McsCodec, Message};
 use ratatui::{Terminal, backend::CrosstermBackend};
-use std::{error::Error, io, time::Duration};
-use tokio::{net::TcpStream, sync::mpsc, time::interval};
+use rustls::{ClientConfig, RootCertStore};
+use rustls_pemfile::certs;
+use rustls_pki_types::ServerName;
+use std::{
+    error::Error,
+    fs::File,
+    io::{self, BufReader},
+    sync::Arc,
+    time::Duration,
+};
+use tokio::{io::split, net::TcpStream, sync::mpsc, time::interval};
+use tokio_rustls::TlsConnector;
 use tokio_util::codec::FramedRead;
 
 mod app;
@@ -15,7 +25,6 @@ mod state;
 use app::ChatApp;
 use state::ChatClient;
 
-/// Events coming from the network to be displayed in the TUI
 enum ChatEvent {
     MessageReceived(String),
     SystemMessage(String),
@@ -33,6 +42,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
+    let mut root_store = RootCertStore::empty();
+    let file = File::open("tls/ca.cert").expect("Failed to open cert");
+    let mut reader = BufReader::new(file);
+    for cert in certs(&mut reader) {
+        let _ = root_store.add(cert?);
+    }
+
+    let config = ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(config));
+
     let stream = match TcpStream::connect("127.0.0.1:64400").await {
         Ok(res) => res,
         Err(_) => {
@@ -41,12 +62,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let (reader, writer) = stream.into_split();
+    let domain = ServerName::try_from("localhost")?;
+    let stream = connector.connect(domain, stream).await?;
+
+    let (reader, writer) = split(stream);
     let mut framed_reader = FramedRead::new(reader, McsCodec);
     let (ui_tx, mut network_rx) = mpsc::unbounded_channel::<String>();
     let (network_tx, mut ui_rx) = mpsc::unbounded_channel::<ChatEvent>();
 
-    let mut client = ChatClient::new(writer, username);
+    let mut client = ChatClient::new(writer, username.clone());
     client.connect(&mut framed_reader).await;
 
     let net_notifier = network_tx.clone();
@@ -90,7 +114,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let term_backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(term_backend)?;
 
-    let mut app = ChatApp::new(ui_tx);
+    let mut app = ChatApp::new(username.clone(), ui_tx);
 
     loop {
         terminal.draw(|f| app.update_ui(f))?;
