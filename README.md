@@ -5,7 +5,7 @@ This project uses TLS 1.2/1.3 for secure communication. Before running the appli
 
 ### Step 1: Create Config File
 Create a file named localhost.cnf in the tls directory of this project to ensure the certificate works for localhost.
-```bash
+```
 [req]
 default_bits = 2048
 prompt = no
@@ -25,9 +25,7 @@ IP.1 = 127.0.0.1
 ```
 
 ### Step 2: Generate Keys and Certificates:
-```bash
-
-
+```
 mkdir tls && cd tls
 
 openssl genrsa -out ca.key 2048
