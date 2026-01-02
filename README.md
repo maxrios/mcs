@@ -1,6 +1,4 @@
-# Max's Chat Service
-
----
+# Max's Chat Service (MCS)
 
 ## Setting up Encryption (TLS)
 This project uses TLS 1.2/1.3 for secure communication. Before running the application, you must generate self-signed certificates.
