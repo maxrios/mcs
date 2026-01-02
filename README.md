@@ -1,6 +1,6 @@
 # Max's Chat Service (MCS)
 
-## Setting up Encryption (TLS)
+## Setting up Project
 This project uses TLS 1.2/1.3 for secure communication. Before running the application, you must generate self-signed certificates.
 
 ### Step 1: Create Config File
@@ -39,4 +39,17 @@ openssl req -new -key server.key -out server.csr -config localhost.cnf
 openssl x509 -req -in server.csr -CA ca.cert -CAkey ca.key -CAcreateserial \
     -out server.cert -days 1825 -sha256 \
     -extensions req_ext -extfile localhost.cnf
+```
+
+### Step 3: Running the Server
+```
+cd ..
+
+cargo run --manifest-path=server/Cargo.toml
+```
+
+
+### Step 4: Running the Client
+```
+cargo run --manifest-path=client/Cargo.toml <username>
 ```
