@@ -133,27 +133,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Enter => app.submit_message(),
-                        KeyCode::Char(c) => app.input.push(c),
-                        KeyCode::Backspace => {
-                            app.input.pop();
-                        }
-                        KeyCode::Up => {
-                            app.scroll = app.scroll.saturating_sub(1);
-                        }
-                        KeyCode::Down => {
-                            if app.scroll < app.scroll_limit {
-                                app.scroll = app.scroll.saturating_add(1);
-                            }
-                        }
-                        KeyCode::Esc => break,
-                        _ => {}
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+        {
+            match key.code {
+                KeyCode::Enter => app.submit_message(),
+                KeyCode::Char(c) => app.input.push(c),
+                KeyCode::Backspace => {
+                    app.input.pop();
+                }
+                KeyCode::Up => {
+                    app.scroll = app.scroll.saturating_sub(1);
+                }
+                KeyCode::Down => {
+                    if app.scroll < app.scroll_limit {
+                        app.scroll = app.scroll.saturating_add(1);
                     }
                 }
+                KeyCode::Esc => break,
+                _ => {}
             }
         }
     }

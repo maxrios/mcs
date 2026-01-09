@@ -37,9 +37,9 @@ impl<W: AsyncWrite + Unpin + Send + Sync + 'static> ChatServer<W> {
         }
     }
 
-    pub async fn broadcast(&self, sender: &str, msg: String) {
+    pub async fn broadcast(&self, sender: &str, msg: &str) {
         let formatted = if sender == "server" {
-            msg.into()
+            msg.to_string()
         } else {
             format!("{}: {}", sender, msg)
         };
@@ -131,7 +131,7 @@ impl<W: AsyncWrite + Unpin + Send + Sync + 'static> ChatServer<W> {
                 }
 
                 for name in timed_out_users {
-                    self.broadcast("server", format!("{} timed out.", name))
+                    self.broadcast("server", format!("{} timed out.", name).as_str())
                         .await;
                 }
             }
@@ -175,7 +175,7 @@ mod test {
         let _ = server.register_user("user_2", writer_user_2).await;
         rx_user_2.next().await;
 
-        server.broadcast("user_1", "test".to_string()).await;
+        server.broadcast("user_1", "test").await;
 
         match rx_user_2.next().await {
             Some(Ok(Message::Chat(msg))) => assert_eq!(msg, "user_1: test"),

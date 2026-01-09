@@ -52,14 +52,14 @@ async fn main() {
 
             let mut framed_reader = FramedRead::new(reader, McsCodec);
 
-            if let Some(Ok(Message::Join(name))) = framed_reader.next().await {
-                if server_ref.register_user(&name, writer).await.is_ok() {
-                    server_ref
-                        .broadcast("server", format!("{} joined.\n", name))
-                        .await;
+            if let Some(Ok(Message::Join(name))) = framed_reader.next().await
+                && server_ref.register_user(&name, writer).await.is_ok()
+            {
+                server_ref
+                    .broadcast("server", format!("{} joined.\n", name).as_str())
+                    .await;
 
-                    handle_session(&name, framed_reader, server_ref).await;
-                }
+                handle_session(&name, framed_reader, server_ref).await;
             }
         });
     }
@@ -75,18 +75,18 @@ async fn handle_session<R, W>(
 {
     while let Some(Ok(msg)) = reader.next().await {
         match msg {
-            Message::Chat(text) => server.broadcast(&name, format!("{}\n", text)).await,
+            Message::Chat(text) => server.broadcast(name, format!("{}\n", text).as_str()).await,
             Message::Heartbeat => {
-                if !server.heartbeat(&name).await {
+                if !server.heartbeat(name).await {
                     break;
                 }
             }
             _ => {}
         }
     }
-    server.remove_user(&name).await;
+    server.remove_user(name).await;
     server
-        .broadcast("server", format!("{} left.\n", name))
+        .broadcast("server", format!("{} left.\n", name).as_str())
         .await;
 }
 
