@@ -45,11 +45,11 @@ openssl x509 -req -in server.csr -CA ca.cert -CAkey ca.key -CAcreateserial \
 ```
 cd ..
 
-cargo run --manifest-path=server/Cargo.toml
+cargo run -p server
 ```
 
 
 ### Step 4: Running the Client
 ```
-cargo run --manifest-path=client/Cargo.toml <username>
+cargo run -p client <username>
 ```
