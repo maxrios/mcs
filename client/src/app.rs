@@ -1,3 +1,5 @@
+use chrono::{DateTime, Local, TimeZone, Utc};
+use protocol::ChatPacket;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
@@ -10,14 +12,14 @@ use tokio::sync::mpsc;
 pub struct ChatApp {
     pub username: String,
     pub input: String,
-    pub messages: Vec<String>,
-    pub network_tx: mpsc::UnboundedSender<String>,
+    pub messages: Vec<ChatPacket>,
+    pub network_tx: mpsc::UnboundedSender<ChatPacket>,
     pub scroll: u16,
     pub scroll_limit: u16,
 }
 
 impl ChatApp {
-    pub fn new(username: String, network_tx: mpsc::UnboundedSender<String>) -> Self {
+    pub fn new(username: String, network_tx: mpsc::UnboundedSender<ChatPacket>) -> Self {
         Self {
             username,
             input: String::new(),
@@ -30,7 +32,11 @@ impl ChatApp {
 
     pub fn submit_message(&mut self) {
         if !self.input.trim().is_empty() {
-            let _ = self.network_tx.send(self.input.clone());
+            let _ = self.network_tx.send(ChatPacket {
+                sender: self.username.clone(),
+                content: self.input.clone(),
+                timestamp: Utc::now().timestamp(),
+            });
             self.input.clear();
         }
     }
@@ -47,15 +53,32 @@ impl ChatApp {
         let mut total_lines = 0u16;
         let mut message_lines = Vec::new();
         for m in self.messages.iter() {
-            let color = if m.starts_with("***") {
+            let color = if m.sender == "server" {
                 Color::DarkGray
             } else {
                 Color::White
             };
-            message_lines.push(Line::from(Span::styled(m, Style::default().fg(color))));
+
+            let converted_time = convert_timestamp_to_local_date(m.timestamp);
+            let unformatted_time = match converted_time {
+                Some(time) => time,
+                _ => continue,
+            };
+            let formatted_time = unformatted_time.format("%D %l:%m %p");
+
+            let text = if m.sender == "server" {
+                format!("[{}] {}", formatted_time, m.content)
+            } else {
+                format!("[{}] {}: {}", formatted_time, m.sender, m.content)
+            };
+
+            message_lines.push(Line::from(Span::styled(
+                text.clone(),
+                Style::default().fg(color),
+            )));
 
             if frame_width > 0 {
-                let m_len = m.len();
+                let m_len = text.len();
                 let lines_for_this_msg = ((m_len.saturating_sub(1) / frame_width) + 1) as u16;
                 total_lines += lines_for_this_msg;
             } else {
@@ -134,4 +157,11 @@ impl ChatApp {
 
         (cursor_x, cursor_y)
     }
+}
+
+fn convert_timestamp_to_local_date(timestamp: i64) -> Option<DateTime<Local>> {
+    let utc_datetime = Utc.timestamp_opt(timestamp, 0).single()?;
+    let local_datetime = utc_datetime.with_timezone(&Local);
+
+    Some(local_datetime)
 }

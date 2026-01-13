@@ -5,8 +5,9 @@ use std::{
     time::Duration,
 };
 
+use chrono::{TimeZone, Utc};
 use futures::{SinkExt, future::join_all};
-use protocol::{McsCodec, Message};
+use protocol::{ChatPacket, McsCodec, Message};
 use tokio::{
     io::AsyncWrite,
     sync::RwLock,
@@ -15,7 +16,7 @@ use tokio::{
 use tokio_util::codec::FramedWrite;
 
 type UserMap<W> = Arc<RwLock<HashMap<String, ConnectedUser<W>>>>;
-type ChatVec = Arc<RwLock<Vec<String>>>;
+type ChatVec = Arc<RwLock<Vec<ChatPacket>>>;
 
 pub struct ConnectedUser<W> {
     pub writer: FramedWrite<W, McsCodec>,
@@ -37,22 +38,24 @@ impl<W: AsyncWrite + Unpin + Send + Sync + 'static> ChatServer<W> {
         }
     }
 
-    pub async fn broadcast(&self, sender: &str, msg: &str) {
-        let formatted = if sender == "server" {
-            msg.to_string()
+    pub async fn broadcast(&self, msg: ChatPacket) {
+        self.chat_history.write().await.push(msg.clone());
+        let datetime = Utc
+            .timestamp_opt(msg.timestamp, 0)
+            .single()
+            .expect("Invalid timestamp");
+        if msg.sender == "server" {
+            print!("[{}] {}", datetime, msg.content);
         } else {
-            format!("{}: {}", sender, msg)
-        };
-
-        self.chat_history.write().await.push(formatted.clone());
-        print!("{}", formatted);
+            println!("[{}] {}: {}", datetime, msg.sender, msg.content);
+        }
         io::stdout().flush().unwrap();
 
         let mut users = self.active_users.write().await;
 
         let broadcast_futures = users
             .iter_mut()
-            .map(|(_, user)| user.writer.send(Message::Chat(formatted.clone())));
+            .map(|(_, user)| user.writer.send(Message::Chat(msg.clone())));
 
         join_all(broadcast_futures).await;
     }
@@ -67,7 +70,8 @@ impl<W: AsyncWrite + Unpin + Send + Sync + 'static> ChatServer<W> {
                 .await;
             return Err("Username too short".into());
         }
-        if users.contains_key(name) {
+
+        if users.contains_key(name) || name == "server" || name == "client" {
             let _ = framed_writer
                 .send(Message::Error("Username taken".into()))
                 .await;
@@ -75,7 +79,11 @@ impl<W: AsyncWrite + Unpin + Send + Sync + 'static> ChatServer<W> {
         }
 
         let _ = framed_writer
-            .send(Message::Chat(format!("Connected to {}", self.host)))
+            .send(Message::Chat(ChatPacket {
+                sender: "server".to_string(),
+                content: format!("Connected to {}", self.host),
+                timestamp: Utc::now().timestamp(),
+            }))
             .await;
 
         let history = self.chat_history.read().await;
@@ -131,8 +139,12 @@ impl<W: AsyncWrite + Unpin + Send + Sync + 'static> ChatServer<W> {
                 }
 
                 for name in timed_out_users {
-                    self.broadcast("server", format!("{} timed out.", name).as_str())
-                        .await;
+                    self.broadcast(ChatPacket {
+                        sender: "server".to_string(),
+                        content: format!("{} timed out.", name),
+                        timestamp: Utc::now().timestamp(),
+                    })
+                    .await;
                 }
             }
         });
@@ -144,7 +156,7 @@ mod test {
     use std::{sync::Arc, time::Duration};
 
     use futures::StreamExt;
-    use protocol::{McsCodec, Message};
+    use protocol::{ChatPacket, McsCodec, Message};
     use tokio::{
         io::{DuplexStream, duplex},
         task::yield_now,
@@ -175,10 +187,19 @@ mod test {
         let _ = server.register_user("user_2", writer_user_2).await;
         rx_user_2.next().await;
 
-        server.broadcast("user_1", "test").await;
+        server
+            .broadcast(ChatPacket {
+                sender: "user_1".to_string(),
+                content: "test".to_string(),
+                timestamp: 0,
+            })
+            .await;
 
         match rx_user_2.next().await {
-            Some(Ok(Message::Chat(msg))) => assert_eq!(msg, "user_1: test"),
+            Some(Ok(Message::Chat(msg))) => {
+                assert_eq!(msg.sender, "user_1");
+                assert_eq!(msg.content, "test");
+            }
             _ => panic!("user_2 did not receive the expected broadcast"),
         }
     }

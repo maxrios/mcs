@@ -1,10 +1,11 @@
+use chrono::Utc;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use futures::{SinkExt, StreamExt};
-use protocol::{McsCodec, Message};
+use protocol::{ChatPacket, McsCodec, Message};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use rustls::{ClientConfig, RootCertStore};
 use rustls_pemfile::certs;
@@ -26,8 +27,8 @@ use app::ChatApp;
 use state::ChatClient;
 
 enum ChatEvent {
-    MessageReceived(String),
-    SystemMessage(String),
+    MessageReceived(ChatPacket),
+    SystemMessage(ChatPacket),
     Error(String),
 }
 
@@ -67,7 +68,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let (reader, writer) = split(stream);
     let mut framed_reader = FramedRead::new(reader, McsCodec);
-    let (ui_tx, mut network_rx) = mpsc::unbounded_channel::<String>();
+    let (ui_tx, mut network_rx) = mpsc::unbounded_channel::<ChatPacket>();
     let (network_tx, mut ui_rx) = mpsc::unbounded_channel::<ChatEvent>();
 
     let mut client = ChatClient::new(writer, username.clone());
@@ -81,21 +82,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
             tokio::select! {
                 result = framed_reader.next() => {
                     match result {
-                        Some(Ok(Message::Chat(text))) => {
-                            let _ = net_notifier.send(ChatEvent::MessageReceived(text));
+                        Some(Ok(Message::Chat(msg))) => {
+                            let _ = net_notifier.send(ChatEvent::MessageReceived(msg));
                         }
                         Some(Ok(Message::Error(err))) => {
                             let _ = net_notifier.send(ChatEvent::Error(format!("Server Error: {}", err)));
                         }
                         None => {
-                            let _ = net_notifier.send(ChatEvent::SystemMessage("Connection closed by server.".to_string()));
+                            let _ = net_notifier.send(
+                                ChatEvent::SystemMessage(
+                                    ChatPacket {
+                                        sender: "server".to_string(),
+                                        content: "Connection closed by server.".to_string(),
+                                        timestamp: Utc::now().timestamp()
+                                    }));
                             break;
                         }
                         _ => {}
                     }
                 }
-                Some(msg_text) = network_rx.recv() => {
-                    if let Err(e) = client.writer.send(Message::Chat(msg_text)).await {
+                Some(msg) = network_rx.recv() => {
+                    if let Err(e) = client.writer.send(Message::Chat(msg)).await {
                         let _ = net_notifier.send(ChatEvent::Error(format!("Failed to send message: {}", e)));
                     }
                 }
@@ -126,10 +133,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     app.scroll = app.scroll.saturating_add(1);
                 }
                 ChatEvent::SystemMessage(msg) => {
-                    app.messages.push(format!("*** {} ***", msg));
+                    app.messages.push(msg);
                     app.scroll = app.scroll.saturating_add(1);
                 }
-                ChatEvent::Error(err) => app.messages.push(format!("ERROR: {}", err)),
+                ChatEvent::Error(err) => {
+                    app.messages.push(ChatPacket {
+                        sender: "server".to_string(),
+                        content: format!("ERROR: {}", err),
+                        timestamp: Utc::now().timestamp(),
+                    });
+                    app.scroll = app.scroll.saturating_add(1);
+                }
             }
         }
 

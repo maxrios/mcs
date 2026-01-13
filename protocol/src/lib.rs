@@ -8,8 +8,15 @@ use tokio_util::{
 pub struct McsCodec;
 
 #[derive(Debug, Clone)]
+pub struct ChatPacket {
+    pub sender: String,
+    pub content: String,
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Clone)]
 pub enum Message {
-    Chat(String),
+    Chat(ChatPacket),
     Join(String),
     Heartbeat,
     Error(String),
@@ -20,7 +27,6 @@ impl Decoder for McsCodec {
     type Error = Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        // Confirms header size: first byte is message type, next 4 bytes is payload size
         if src.len() < 5 {
             return Ok(None);
         }
@@ -29,19 +35,31 @@ impl Decoder for McsCodec {
         length_bytes.copy_from_slice(&src[1..5]);
         let length = u32::from_be_bytes(length_bytes) as usize;
 
-        // Checks if full payload has arrived
         if src.len() < 5 + length {
             return Ok(None);
         }
 
         let msg_type = src.get_u8();
         src.advance(4);
-        let payload = src.split_to(length);
+        let mut payload = src.split_to(length);
 
         match msg_type {
             1 => {
-                let s = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
-                Ok(Option::from(Message::Chat(s)))
+                if payload.remaining() < 12 {
+                    return Err(Error::new(InvalidData, "Payload too short for ChatPacket"));
+                }
+
+                let timestamp = payload.get_i64();
+                let name_length = payload.get_u32() as usize;
+                let name_bytes = payload.split_to(name_length);
+                let sender = String::from_utf8(name_bytes.to_vec()).map_err(|_| InvalidData)?;
+                let content = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
+
+                Ok(Option::from(Message::Chat(ChatPacket {
+                    sender,
+                    content,
+                    timestamp,
+                })))
             }
             2 => {
                 let s = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
@@ -62,11 +80,19 @@ impl Encoder<Message> for McsCodec {
 
     fn encode(&mut self, item: Message, dst: &mut BytesMut) -> Result<(), Self::Error> {
         match item {
-            Message::Chat(text) => {
-                let payload = text.as_bytes();
+            Message::Chat(packet) => {
+                let sender_bytes = packet.sender.as_bytes();
+                let content_bytes = packet.content.as_bytes();
+
+                // timestamp length + sender length + sender bytes + content bytes
+                let payload_length = 12 + sender_bytes.len() + content_bytes.len();
+
                 dst.put_u8(0x01);
-                dst.put_u32(payload.len() as u32);
-                dst.extend_from_slice(payload);
+                dst.put_u32(payload_length as u32);
+                dst.put_i64(packet.timestamp);
+                dst.put_u32(sender_bytes.len() as u32);
+                dst.extend_from_slice(sender_bytes);
+                dst.extend_from_slice(content_bytes);
             }
             Message::Join(username) => {
                 let payload = username.as_bytes();
@@ -91,6 +117,8 @@ impl Encoder<Message> for McsCodec {
 
 #[cfg(test)]
 mod tests {
+    use crate::ChatPacket;
+
     use super::McsCodec;
     use super::Message;
     use bytes::BytesMut;
@@ -99,8 +127,14 @@ mod tests {
     #[test]
     fn encode_decode_cycle_succeeds() {
         let mut buf = BytesMut::new();
-        let original_msg_text = "Some Message";
-        let original_msg = Message::Chat(original_msg_text.to_string());
+        let sender = "sender".to_string();
+        let timestamp = 101;
+        let content = "Some Message".to_string();
+        let original_msg = Message::Chat(ChatPacket {
+            sender: sender.clone(),
+            content: content.clone(),
+            timestamp,
+        });
 
         McsCodec.encode(original_msg.clone(), &mut buf).unwrap();
         let decode_msg = McsCodec
@@ -109,7 +143,9 @@ mod tests {
             .expect("Should return a message");
 
         if let Message::Chat(msg) = decode_msg {
-            assert_eq!(msg, original_msg_text);
+            assert_eq!(msg.timestamp, timestamp);
+            assert_eq!(msg.sender, sender);
+            assert_eq!(msg.content, content);
         } else {
             panic!("Decoded wrong message type");
         }
@@ -118,43 +154,63 @@ mod tests {
     #[test]
     fn partial_packet_decoding_succeeds() {
         let mut buf = BytesMut::new();
-        buf.extend_from_slice(&[0x01, 0x00, 0x00]);
 
-        let result = McsCodec.decode(&mut buf).unwrap();
-        assert!(result.is_none());
-        assert_eq!(buf.len(), 3);
+        let msg1 = Message::Chat(ChatPacket {
+            sender: "Alice".to_string(),
+            content: "Part 1".to_string(),
+            timestamp: 100,
+        });
 
-        buf.extend_from_slice(&[0x00, 0x05]);
-        buf.extend_from_slice(b"Hello");
+        let msg2 = Message::Chat(ChatPacket {
+            sender: "Bob".to_string(),
+            content: "Part 2".to_string(),
+            timestamp: 200,
+        });
 
-        let result = McsCodec
-            .decode(&mut buf)
-            .unwrap()
-            .expect("Should now have a full message");
-        if let Message::Chat(msg) = result {
-            assert_eq!(msg, "Hello");
+        let mut full_stream = BytesMut::new();
+        McsCodec.encode(msg1, &mut full_stream).unwrap();
+        McsCodec.encode(msg2, &mut full_stream).unwrap();
+
+        let split_point = 10;
+        buf.extend_from_slice(&full_stream[..split_point]);
+
+        {
+            let result = McsCodec.decode(&mut buf).unwrap();
+            assert!(
+                result.is_none(),
+                "Should return None when data is incomplete"
+            );
         }
-    }
 
-    #[test]
-    fn multiple_messages_in_buffer_succeeds() {
-        let mut buf = BytesMut::new();
+        buf.extend_from_slice(&full_stream[split_point..]);
 
-        McsCodec
-            .encode(Message::Chat("Message 1".to_string()), &mut buf)
-            .unwrap();
-        McsCodec
-            .encode(Message::Chat("Message 2".to_string()), &mut buf)
-            .unwrap();
+        {
+            let result = McsCodec
+                .decode(&mut buf)
+                .unwrap()
+                .expect("Should decode message 1");
+            if let Message::Chat(msg) = result {
+                assert_eq!(msg.sender, "Alice".to_string());
+                assert_eq!(msg.content, "Part 1".to_string());
+                assert_eq!(msg.timestamp, 100);
+            } else {
+                panic!("Incorrect Message type")
+            }
+        }
 
-        let _ = McsCodec
-            .decode(&mut buf)
-            .unwrap()
-            .expect("Should get message 1");
-        let _ = McsCodec
-            .decode(&mut buf)
-            .unwrap()
-            .expect("Should get message 2");
+        {
+            let result = McsCodec
+                .decode(&mut buf)
+                .unwrap()
+                .expect("Should decode message 2");
+            if let Message::Chat(msg) = result {
+                assert_eq!(msg.sender, "Bob".to_string());
+                assert_eq!(msg.content, "Part 2".to_string());
+                assert_eq!(msg.timestamp, 200);
+            } else {
+                panic!("Incorrect Message type")
+            }
+        }
 
         assert!(buf.is_empty());
     }

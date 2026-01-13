@@ -1,7 +1,8 @@
 use std::{fs::File, io::BufReader, sync::Arc};
 
+use chrono::Utc;
 use futures::StreamExt;
-use protocol::{McsCodec, Message};
+use protocol::{ChatPacket, McsCodec, Message};
 use rustls::ServerConfig;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
@@ -56,7 +57,11 @@ async fn main() {
                 && server_ref.register_user(&name, writer).await.is_ok()
             {
                 server_ref
-                    .broadcast("server", format!("{} joined.\n", name).as_str())
+                    .broadcast(ChatPacket {
+                        sender: "server".to_string(),
+                        content: format!("{} joined.\n", name),
+                        timestamp: Utc::now().timestamp(),
+                    })
                     .await;
 
                 handle_session(&name, framed_reader, server_ref).await;
@@ -75,7 +80,7 @@ async fn handle_session<R, W>(
 {
     while let Some(Ok(msg)) = reader.next().await {
         match msg {
-            Message::Chat(text) => server.broadcast(name, format!("{}\n", text).as_str()).await,
+            Message::Chat(text) => server.broadcast(text).await,
             Message::Heartbeat => {
                 if !server.heartbeat(name).await {
                     break;
@@ -86,7 +91,11 @@ async fn handle_session<R, W>(
     }
     server.remove_user(name).await;
     server
-        .broadcast("server", format!("{} left.\n", name).as_str())
+        .broadcast(ChatPacket {
+            sender: "server".to_string(),
+            content: format!("{} left.\n", name),
+            timestamp: Utc::now().timestamp(),
+        })
         .await;
 }
 
