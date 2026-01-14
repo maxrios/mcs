@@ -56,9 +56,11 @@ impl Decoder for McsCodec {
                 let sender = String::from_utf8(name_bytes.to_vec()).map_err(|_| InvalidData)?;
                 let content = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
 
-                Ok(Option::from(Message::Chat(ChatPacket::new_user_packet(
-                    sender, content,
-                ))))
+                Ok(Option::from(Message::Chat(ChatPacket {
+                    sender,
+                    content,
+                    timestamp,
+                })))
             }
             2 => {
                 let s = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
