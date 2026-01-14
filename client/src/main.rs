@@ -91,11 +91,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         None => {
                             let _ = net_notifier.send(
                                 ChatEvent::SystemMessage(
-                                    ChatPacket {
-                                        sender: "server".to_string(),
-                                        content: "Connection closed by server.".to_string(),
-                                        timestamp: Utc::now().timestamp()
-                                    }));
+                                    ChatPacket::new_server_packet("Connection closed by server.".to_string())));
                             break;
                         }
                         _ => {}
@@ -137,11 +133,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     app.scroll = app.scroll.saturating_add(1);
                 }
                 ChatEvent::Error(err) => {
-                    app.messages.push(ChatPacket {
-                        sender: "server".to_string(),
-                        content: format!("ERROR: {}", err),
-                        timestamp: Utc::now().timestamp(),
-                    });
+                    app.messages
+                        .push(ChatPacket::new_server_packet(format!("ERROR: {}", err)));
                     app.scroll = app.scroll.saturating_add(1);
                 }
             }

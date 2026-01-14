@@ -79,11 +79,10 @@ impl<W: AsyncWrite + Unpin + Send + Sync + 'static> ChatServer<W> {
         }
 
         let _ = framed_writer
-            .send(Message::Chat(ChatPacket {
-                sender: "server".to_string(),
-                content: format!("Connected to {}", self.host),
-                timestamp: Utc::now().timestamp(),
-            }))
+            .send(Message::Chat(ChatPacket::new_server_packet(format!(
+                "Connected to {}",
+                self.host
+            ))))
             .await;
 
         let history = self.chat_history.read().await;
@@ -139,11 +138,10 @@ impl<W: AsyncWrite + Unpin + Send + Sync + 'static> ChatServer<W> {
                 }
 
                 for name in timed_out_users {
-                    self.broadcast(ChatPacket {
-                        sender: "server".to_string(),
-                        content: format!("{} timed out.", name),
-                        timestamp: Utc::now().timestamp(),
-                    })
+                    self.broadcast(ChatPacket::new_server_packet(format!(
+                        "{} timed out.",
+                        name
+                    )))
                     .await;
                 }
             }
@@ -188,11 +186,10 @@ mod test {
         rx_user_2.next().await;
 
         server
-            .broadcast(ChatPacket {
-                sender: "user_1".to_string(),
-                content: "test".to_string(),
-                timestamp: 0,
-            })
+            .broadcast(ChatPacket::new_user_packet(
+                "user_1".to_string(),
+                "test".to_string(),
+            ))
             .await;
 
         match rx_user_2.next().await {

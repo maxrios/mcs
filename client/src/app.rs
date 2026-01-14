@@ -32,11 +32,10 @@ impl ChatApp {
 
     pub fn submit_message(&mut self) {
         if !self.input.trim().is_empty() {
-            let _ = self.network_tx.send(ChatPacket {
-                sender: self.username.clone(),
-                content: self.input.clone(),
-                timestamp: Utc::now().timestamp(),
-            });
+            let _ = self.network_tx.send(ChatPacket::new_user_packet(
+                self.username.clone(),
+                self.input.clone(),
+            ));
             self.input.clear();
         }
     }

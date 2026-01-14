@@ -1,5 +1,6 @@
 use std::io::{Error, ErrorKind::InvalidData};
 
+use chrono::Utc;
 use tokio_util::{
     bytes::{Buf, BufMut, BytesMut},
     codec::{Decoder, Encoder},
@@ -55,11 +56,9 @@ impl Decoder for McsCodec {
                 let sender = String::from_utf8(name_bytes.to_vec()).map_err(|_| InvalidData)?;
                 let content = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
 
-                Ok(Option::from(Message::Chat(ChatPacket {
-                    sender,
-                    content,
-                    timestamp,
-                })))
+                Ok(Option::from(Message::Chat(ChatPacket::new_user_packet(
+                    sender, content,
+                ))))
             }
             2 => {
                 let s = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
@@ -115,6 +114,24 @@ impl Encoder<Message> for McsCodec {
     }
 }
 
+impl ChatPacket {
+    pub fn new_server_packet(content: String) -> ChatPacket {
+        ChatPacket {
+            sender: "server".to_string(),
+            content,
+            timestamp: Utc::now().timestamp(),
+        }
+    }
+
+    pub fn new_user_packet(sender: String, content: String) -> ChatPacket {
+        ChatPacket {
+            sender,
+            content,
+            timestamp: Utc::now().timestamp(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ChatPacket;
@@ -130,11 +147,8 @@ mod tests {
         let sender = "sender".to_string();
         let timestamp = 101;
         let content = "Some Message".to_string();
-        let original_msg = Message::Chat(ChatPacket {
-            sender: sender.clone(),
-            content: content.clone(),
-            timestamp,
-        });
+        let original_msg =
+            Message::Chat(ChatPacket::new_user_packet(sender.clone(), content.clone()));
 
         McsCodec.encode(original_msg.clone(), &mut buf).unwrap();
         let decode_msg = McsCodec

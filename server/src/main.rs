@@ -1,6 +1,5 @@
 use std::{fs::File, io::BufReader, sync::Arc};
 
-use chrono::Utc;
 use futures::StreamExt;
 use protocol::{ChatPacket, McsCodec, Message};
 use rustls::ServerConfig;
@@ -57,11 +56,7 @@ async fn main() {
                 && server_ref.register_user(&name, writer).await.is_ok()
             {
                 server_ref
-                    .broadcast(ChatPacket {
-                        sender: "server".to_string(),
-                        content: format!("{} joined.\n", name),
-                        timestamp: Utc::now().timestamp(),
-                    })
+                    .broadcast(ChatPacket::new_server_packet(format!("{} joined.\n", name)))
                     .await;
 
                 handle_session(&name, framed_reader, server_ref).await;
@@ -91,11 +86,7 @@ async fn handle_session<R, W>(
     }
     server.remove_user(name).await;
     server
-        .broadcast(ChatPacket {
-            sender: "server".to_string(),
-            content: format!("{} left.\n", name),
-            timestamp: Utc::now().timestamp(),
-        })
+        .broadcast(ChatPacket::new_server_packet(format!("{} left.\n", name)))
         .await;
 }
 
