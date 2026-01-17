@@ -1,12 +1,12 @@
 use std::{fs::File, io::BufReader, sync::Arc};
 
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use protocol::{ChatPacket, McsCodec, Message};
 use rustls::ServerConfig;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::TlsAcceptor;
-use tokio_util::codec::FramedRead;
+use tokio_util::codec::{FramedRead, FramedWrite};
 
 use tokio::{
     io::{AsyncRead, AsyncWrite, split},
@@ -27,7 +27,7 @@ async fn main() {
         .expect("bad certificate or key");
     let acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
-    let server = Arc::new(ChatServer::new(host));
+    let server = Arc::new(ChatServer::new());
     server.clone().spawn_reaper();
 
     let listener = TcpListener::bind(host).await.unwrap();
@@ -51,37 +51,86 @@ async fn main() {
             let (reader, writer) = split(stream);
 
             let mut framed_reader = FramedRead::new(reader, McsCodec);
+            let mut framed_writer = FramedWrite::new(writer, McsCodec);
 
             if let Some(Ok(Message::Join(name))) = framed_reader.next().await
-                && server_ref.register_user(&name, writer).await.is_ok()
+                && handle_registration(&server_ref, &mut framed_writer, &name)
+                    .await
+                    .is_ok()
             {
-                server_ref
-                    .broadcast(ChatPacket::new_server_packet(format!("{} joined.\n", name)))
-                    .await;
-
-                handle_session(&name, framed_reader, server_ref).await;
+                handle_session(&name, framed_reader, framed_writer, server_ref).await;
             }
         });
+    }
+}
+
+async fn handle_registration<W>(
+    server: &Arc<ChatServer>,
+    writer: &mut FramedWrite<W, McsCodec>,
+    name: &str,
+) -> Result<(), ()>
+where
+    W: AsyncWrite + Unpin + Send + Sync + 'static,
+{
+    match server.register_user(name).await {
+        Ok(_) => {
+            let _ = writer
+                .send(Message::Chat(ChatPacket::new_server_packet(
+                    "Connected!".to_string(),
+                )))
+                .await;
+
+            server
+                .broadcast(ChatPacket::new_server_packet(format!("{} joined.\n", name)))
+                .await;
+
+            let history = server.get_history().await;
+            for packet in history {
+                let _ = writer.send(Message::Chat(packet)).await;
+            }
+
+            Ok(())
+        }
+        Err(e) => {
+            let _ = writer.send(Message::Error(e)).await;
+            Err(())
+        }
     }
 }
 
 async fn handle_session<R, W>(
     name: &str,
     mut reader: FramedRead<R, McsCodec>,
-    server: Arc<ChatServer<W>>,
+    mut writer: FramedWrite<W, McsCodec>,
+    server: Arc<ChatServer>,
 ) where
     R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin + Send + Sync + 'static,
+    W: AsyncWrite + Unpin,
 {
-    while let Some(Ok(msg)) = reader.next().await {
-        match msg {
-            Message::Chat(text) => server.broadcast(text).await,
-            Message::Heartbeat => {
-                if !server.heartbeat(name).await {
+    let mut rx = server.subscribe();
+
+    loop {
+        tokio::select! {
+            result = reader.next() => {
+                match result {
+                    Some(Ok(msg)) => match msg {
+                        Message::Chat(text) => server.broadcast(text).await,
+
+                        Message::Heartbeat => {
+                            if !server.heartbeat(name).await {
+                                break;
+                            }
+                        }
+                        _ => break
+                    }
+                    _ => break
+                }
+            }
+            Ok(msg) = rx.recv() => {
+                if writer.send(msg).await.is_err() {
                     break;
                 }
             }
-            _ => {}
         }
     }
     server.remove_user(name).await;
