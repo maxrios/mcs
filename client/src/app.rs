@@ -52,12 +52,6 @@ impl ChatApp {
         let mut total_lines = 0u16;
         let mut message_lines = Vec::new();
         for m in self.messages.iter() {
-            let color = if m.sender == "server" {
-                Color::DarkGray
-            } else {
-                Color::White
-            };
-
             let converted_time = convert_timestamp_to_local_date(m.timestamp);
             let unformatted_time = match converted_time {
                 Some(time) => time,
@@ -73,7 +67,7 @@ impl ChatApp {
 
             message_lines.push(Line::from(Span::styled(
                 text.clone(),
-                Style::default().fg(color),
+                Style::default().fg(Color::White),
             )));
 
             if frame_width > 0 {
