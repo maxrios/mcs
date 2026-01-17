@@ -12,16 +12,12 @@ use tokio::{
     time::{Instant, interval},
 };
 
-type UserMap = Arc<DashMap<String, ConnectedUser>>;
+type UserHeartbeatMap = Arc<DashMap<String, Instant>>;
 type ChatVec = Arc<RwLock<Vec<ChatPacket>>>;
-
-pub struct ConnectedUser {
-    pub last_seen: Instant,
-}
 
 pub struct ChatServer {
     channel_tx: broadcast::Sender<Message>,
-    active_users: UserMap,
+    active_users: UserHeartbeatMap,
     chat_history: ChatVec,
 }
 
@@ -69,12 +65,7 @@ impl ChatServer {
             return Err("Username taken".into());
         }
 
-        self.active_users.insert(
-            name.into(),
-            ConnectedUser {
-                last_seen: Instant::now(),
-            },
-        );
+        self.active_users.insert(name.into(), Instant::now());
 
         Ok(())
     }
@@ -84,12 +75,9 @@ impl ChatServer {
     }
 
     pub async fn heartbeat(&self, name: &str) -> bool {
-        if let Some(mut u) = self.active_users.get_mut(name) {
-            u.last_seen = Instant::now();
-            true
-        } else {
-            false
-        }
+        self.active_users
+            .insert(name.to_string(), Instant::now())
+            .is_some()
     }
 
     pub fn spawn_reaper(self: Arc<Self>) {
@@ -102,8 +90,8 @@ impl ChatServer {
                 let mut timed_out_users = Vec::new();
 
                 {
-                    self.active_users.retain(|name, user| {
-                        if now.duration_since(user.last_seen).as_secs() > 30 {
+                    self.active_users.retain(|name, &mut last_seen| {
+                        if now.duration_since(last_seen).as_secs() > 30 {
                             timed_out_users.push(name.clone());
                             false
                         } else {
@@ -201,16 +189,16 @@ mod test {
         let server = ChatServer::new();
 
         let _ = server.register_user("user_1").await;
-        let last_seen_first = if let Some(user) = server.active_users.get("user_1") {
-            user.last_seen
+        let last_seen_first = if let Some(entry) = server.active_users.get("user_1") {
+            *entry.value()
         } else {
             panic!("user not found")
         };
 
         assert!(server.heartbeat("user_1").await);
 
-        let last_seen_second = if let Some(user) = server.active_users.get("user_1") {
-            user.last_seen
+        let last_seen_second = if let Some(entry) = server.active_users.get("user_1") {
+            *entry.value()
         } else {
             panic!("user not found")
         };

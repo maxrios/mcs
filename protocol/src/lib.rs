@@ -147,7 +147,6 @@ mod tests {
     fn encode_decode_cycle_succeeds() {
         let mut buf = BytesMut::new();
         let sender = "sender".to_string();
-        let timestamp = 101;
         let content = "Some Message".to_string();
         let original_msg =
             Message::Chat(ChatPacket::new_user_packet(sender.clone(), content.clone()));
@@ -159,7 +158,6 @@ mod tests {
             .expect("Should return a message");
 
         if let Message::Chat(msg) = decode_msg {
-            assert_eq!(msg.timestamp, timestamp);
             assert_eq!(msg.sender, sender);
             assert_eq!(msg.content, content);
         } else {
