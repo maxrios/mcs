@@ -1,4 +1,5 @@
 # **Max's Chat Service (MCS)**
+A networking project to learn Rust🦀
 
 ## **Setting up Project**
 This project uses TLS 1.2/1.3 for secure communication. Before running the application, you must generate self-signed certificates.
