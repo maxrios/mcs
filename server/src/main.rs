@@ -1,8 +1,8 @@
-use std::{fs::File, io::BufReader, sync::Arc};
+use std::{env, fs::File, io::BufReader, sync::Arc};
 
 use futures::{SinkExt, StreamExt};
 use protocol::{ChatPacket, McsCodec, Message};
-use rustls::ServerConfig;
+use rustls::{ServerConfig, crypto::ring};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::TlsAcceptor;
@@ -13,21 +13,30 @@ use tokio::{
     net::TcpListener,
 };
 
+mod db;
 mod state;
 use state::ChatServer;
 
 #[tokio::main]
 async fn main() {
+    if ring::default_provider().install_default().is_err() {
+        panic!("Failed to set default CryptoProvider");
+    }
+
     let host = "0.0.0.0:64400";
+    let database_url = env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://postgres:password@localhost:5432/postgres".to_string());
+
     let certs = load_certs("tls/server.cert");
     let keys = load_keys("tls/server.key");
+
     let tls_config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, keys)
         .expect("bad certificate or key");
     let acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
-    let server = Arc::new(ChatServer::new());
+    let server = Arc::new(ChatServer::new(&database_url).await);
     server.clone().spawn_reaper();
 
     let listener = TcpListener::bind(host).await.unwrap();

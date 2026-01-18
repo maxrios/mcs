@@ -6,7 +6,7 @@ use crossterm::{
 use futures::{SinkExt, StreamExt};
 use protocol::{ChatPacket, McsCodec, Message};
 use ratatui::{Terminal, backend::CrosstermBackend};
-use rustls::{ClientConfig, RootCertStore};
+use rustls::{ClientConfig, RootCertStore, crypto::ring};
 use rustls_pemfile::certs;
 use rustls_pki_types::ServerName;
 use std::{
@@ -33,6 +33,10 @@ enum ChatEvent {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    if ring::default_provider().install_default().is_err() {
+        panic!("Failed to set default CryptoProvider");
+    }
+
     let args: Vec<String> = std::env::args().collect();
     let username = match args.get(1) {
         Some(u) => u.clone(),

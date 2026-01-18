@@ -4,31 +4,32 @@ use std::{
     time::Duration,
 };
 
+use crate::db::Database;
+
 use chrono::{TimeZone, Utc};
 use dashmap::DashMap;
 use protocol::{ChatPacket, Message};
 use tokio::{
-    sync::{RwLock, broadcast},
+    sync::broadcast,
     time::{Instant, interval},
 };
 
 type UserHeartbeatMap = Arc<DashMap<String, Instant>>;
-type ChatVec = Arc<RwLock<Vec<ChatPacket>>>;
 
 pub struct ChatServer {
     channel_tx: broadcast::Sender<Message>,
     active_users: UserHeartbeatMap,
-    chat_history: ChatVec,
+    db: Database,
 }
 
 impl ChatServer {
-    pub fn new() -> Self {
+    pub async fn new(database_url: &str) -> Self {
         let (tx, _) = broadcast::channel(100);
 
         Self {
             channel_tx: tx,
             active_users: Arc::new(DashMap::new()),
-            chat_history: Arc::new(RwLock::new(Vec::new())),
+            db: Database::new(database_url).await,
         }
     }
 
@@ -37,7 +38,13 @@ impl ChatServer {
     }
 
     pub async fn get_history(&self) -> Vec<ChatPacket> {
-        self.chat_history.read().await.clone()
+        match self.db.get_recent_messages().await {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                eprintln!("Failed to retrieve messages: {}", e);
+                Vec::new()
+            }
+        }
     }
 
     pub async fn broadcast(&self, msg: ChatPacket) {
@@ -52,8 +59,12 @@ impl ChatServer {
         }
         io::stdout().flush().unwrap();
 
-        let _ = self.channel_tx.send(Message::Chat(msg.clone()));
-        self.chat_history.write().await.push(msg);
+        if let Err(e) = self.db.save_message(&msg).await {
+            eprintln!("Failed to save message: {}", e);
+            return;
+        }
+
+        let _ = self.channel_tx.send(Message::Chat(msg));
     }
 
     pub async fn register_user(&self, name: &str) -> Result<(), String> {
@@ -124,9 +135,14 @@ mod test {
 
     use crate::state::ChatServer;
 
+    async fn setup_test_server() -> Arc<ChatServer> {
+        let db_url = "postgres://postgres:password@localhost:5432/postgres";
+        Arc::new(ChatServer::new(db_url).await)
+    }
+
     #[tokio::test]
     async fn broadcast_succeeds() {
-        let server = ChatServer::new();
+        let server = setup_test_server().await;
         let mut rx = server.subscribe();
 
         server
@@ -147,7 +163,7 @@ mod test {
 
     #[tokio::test]
     async fn register_user_succeeds() {
-        let server = ChatServer::new();
+        let server = setup_test_server().await;
 
         let result = server.register_user("user_1").await;
 
@@ -156,7 +172,7 @@ mod test {
 
     #[tokio::test]
     async fn register_user_too_short_fails() {
-        let server = ChatServer::new();
+        let server = setup_test_server().await;
 
         let result = server.register_user("u").await;
 
@@ -165,7 +181,7 @@ mod test {
 
     #[tokio::test]
     async fn register_user_taken_fails() {
-        let server = ChatServer::new();
+        let server = setup_test_server().await;
 
         let _ = server.register_user("user_1").await;
         let result = server.register_user("user_1").await;
@@ -175,7 +191,7 @@ mod test {
 
     #[tokio::test]
     async fn remove_user_succeeds() {
-        let server = ChatServer::new();
+        let server = setup_test_server().await;
 
         let _ = server.register_user("user_1").await;
         server.remove_user("user_1").await;
@@ -186,7 +202,7 @@ mod test {
 
     #[tokio::test]
     async fn heartbeat_succeeds() {
-        let server = ChatServer::new();
+        let server = setup_test_server().await;
 
         let _ = server.register_user("user_1").await;
         let last_seen_first = if let Some(entry) = server.active_users.get("user_1") {
@@ -208,12 +224,13 @@ mod test {
 
     #[tokio::test]
     async fn spawn_reaper_succeeds() {
-        pause();
-
-        let server = Arc::new(ChatServer::new());
+        let server = setup_test_server().await;
         let _ = server.register_user("user_1").await;
 
+        pause();
+
         server.clone().spawn_reaper();
+
         advance(Duration::from_secs(20)).await;
         yield_now().await;
 

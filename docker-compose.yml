@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgres:latest
+    container_name: mcs-postgres
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    networks:
+      - mcs-net
+
+  server:
+    build: .
+    container_name: mcs-server
+    ports:
+      - "64400:64400"
+    volumes:
+      - ./tls:/app/tls
+    environment:
+      DATABASE_URL: postgres://postgres:password@db:5432/postgres
+    depends_on:
+      - db
+    restart: on-failure
+    networks:
+      - mcs-net
+
+networks:
+  mcs-net:

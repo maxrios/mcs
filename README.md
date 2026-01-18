@@ -3,8 +3,12 @@
 ## **Setting up Project**
 This project uses TLS 1.2/1.3 for secure communication. Before running the application, you must generate self-signed certificates.
 
-### **Step 1: Create Config File**
-Create a file named localhost.cnf in the tls directory of this project to ensure the certificate works for localhost.
+### **1: Create Config File**
+```
+mkdir tls && cd tls
+```
+
+Create a `localhost.cnf` in the tls directory of this project to ensure the certificate works for localhost.
 ```
 [req]
 default_bits = 2048
@@ -22,12 +26,11 @@ subjectAltName = @alt_names
 [alt_names]
 DNS.1 = localhost
 IP.1 = 127.0.0.1
+IP.2 = 0.0.0.0
 ```
 
-### **Step 2: Generate Keys and Certificates:**
+### **2: Generate Keys and Certificates:**
 ```
-mkdir tls && cd tls
-
 openssl genrsa -out ca.key 2048
 
 openssl req -x509 -new -nodes -key ca.key -sha256 -days 1825 -out ca.cert -subj "/CN=MyChatRoot"
@@ -41,15 +44,15 @@ openssl x509 -req -in server.csr -CA ca.cert -CAkey ca.key -CAcreateserial \
     -extensions req_ext -extfile localhost.cnf
 ```
 
-### **Step 3: Running the Server**
+### **3: Running the Server**
 ```
 cd ..
 
-cargo run -p server
+docker compose up --build
 ```
 
 
-### **Step 4: Running the Client**
+### **4: Running the Client**
 ```
 cargo run -p client <username>
 ```
