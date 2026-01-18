@@ -18,7 +18,7 @@ use state::ChatServer;
 
 #[tokio::main]
 async fn main() {
-    let host = "127.0.0.1:64400";
+    let host = "0.0.0.0:64400";
     let certs = load_certs("tls/server.cert");
     let keys = load_keys("tls/server.key");
     let tls_config = ServerConfig::builder()

@@ -54,10 +54,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
 
-    let stream = match TcpStream::connect("127.0.0.1:64400").await {
+    let stream = match TcpStream::connect("0.0.0.0:64400").await {
         Ok(res) => res,
         Err(_) => {
-            eprintln!("Error: Could not connect to server at 127.0.0.1:64400");
+            eprintln!("Error: Could not connect to server at 0.0.0.0:64400");
             return Ok(());
         }
     };
