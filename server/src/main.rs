@@ -23,26 +23,44 @@ use crate::error::Error;
 #[tokio::main]
 async fn main() {
     if ring::default_provider().install_default().is_err() {
-        panic!("Failed to set default CryptoProvider");
+        panic!("failed to set default CryptoProvider");
     }
 
     let host = "0.0.0.0:64400";
     let database_url = env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:password@localhost:5432/postgres".to_string());
 
-    let certs = load_certs("tls/server.cert");
-    let keys = load_keys("tls/server.key");
-    let tls_config = ServerConfig::builder()
+    let certs = match load_certs("tls/server.cert") {
+        Ok(certs) => certs,
+        Err(e) => {
+            eprintln!("failed to load certs: {}", e);
+            return;
+        }
+    };
+    let keys = match load_keys("tls/server.key") {
+        Ok(keys) => keys,
+        Err(e) => {
+            eprintln!("failed to load keys: {}", e);
+            return;
+        }
+    };
+    let tls_config = match ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, keys)
-        .expect("bad certificate or key");
+    {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("failed to set single cert and match private keys: {}", e);
+            return;
+        }
+    };
 
     let acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
     let server = match ChatServer::new(&database_url).await {
         Ok(server) => Arc::new(server),
         Err(e) => {
-            eprintln!("Failed to initilize database: {}", e);
+            eprintln!("failed to initilize database: {}", e);
             return;
         }
     };
@@ -50,11 +68,11 @@ async fn main() {
 
     let listener = match TcpListener::bind(host).await {
         Ok(listener) => {
-            println!("Server running on {}", host);
+            println!("server running on {}", host);
             listener
         }
         Err(e) => {
-            eprintln!("Server failed to bind to host: {}", e);
+            eprintln!("server failed to bind to host: {}", e);
             return;
         }
     };
@@ -62,11 +80,11 @@ async fn main() {
     loop {
         let (socket, _) = match listener.accept().await {
             Ok((socket, addr)) => {
-                println!("Connecting user at {}:{}", addr.ip(), addr.port());
+                println!("connecting user at {}:{}", addr.ip(), addr.port());
                 (socket, addr)
             }
             Err(e) => {
-                eprintln!("Connection failed: {}", e);
+                eprintln!("connection failed: {}", e);
                 continue;
             }
         };
@@ -186,19 +204,24 @@ async fn handle_session<R, W>(
     }
 }
 
-fn load_certs(path: &str) -> Vec<CertificateDer<'static>> {
-    let file = File::open(path).expect("Failed to open cert path");
+fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>, Error> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(e) => return Err(Error::IO(e)),
+    };
     let mut reader = BufReader::new(file);
-    certs(&mut reader).map(|result| result.unwrap()).collect()
+    Ok(certs(&mut reader).map(|result| result.unwrap()).collect())
 }
 
-fn load_keys(path: &str) -> PrivateKeyDer<'static> {
-    let file = File::open(path).expect("cannot open key file");
+fn load_keys(path: &str) -> Result<PrivateKeyDer<'static>, Error> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(e) => return Err(Error::IO(e)),
+    };
     let mut reader = BufReader::new(file);
-    // Assuming PKCS8 (standard format)
-    pkcs8_private_keys(&mut reader)
+    Ok(pkcs8_private_keys(&mut reader)
         .next()
         .unwrap()
         .unwrap()
-        .into()
+        .into())
 }

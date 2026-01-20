@@ -7,6 +7,9 @@ pub enum Error {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 
+    #[error("issue accessing file: {0}")]
+    IO(#[from] std::io::Error),
+
     #[error("network error: {0}")]
     Network(#[from] SendError<Message>),
 
