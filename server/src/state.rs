@@ -84,7 +84,7 @@ impl ChatServer {
             .is_some()
     }
 
-    pub fn spawn_reaper(self: Arc<Self>) {
+    pub fn spawn_watchdog(self: Arc<Self>) {
         tokio::spawn(async move {
             let mut interval = interval(Duration::from_secs(10));
 
@@ -225,13 +225,13 @@ mod test {
     }
 
     #[tokio::test]
-    async fn spawn_reaper_succeeds() {
+    async fn spawn_watchdog_succeeds() {
         let server = setup_test_server().await;
         let _ = server.register_user("user_1").await;
 
         pause();
 
-        server.clone().spawn_reaper();
+        server.clone().spawn_watchdog();
 
         advance(Duration::from_secs(20)).await;
         yield_now().await;

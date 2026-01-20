@@ -46,7 +46,7 @@ async fn main() {
             return;
         }
     };
-    server.clone().spawn_reaper();
+    server.clone().spawn_watchdog();
 
     let listener = match TcpListener::bind(host).await {
         Ok(listener) => {
