@@ -18,7 +18,7 @@ impl<W: AsyncWrite + Unpin> ChatClient<W> {
         }
     }
 
-    pub async fn connect<R>(&mut self, reader: &mut FramedRead<R, McsCodec>)
+    pub async fn connect<R>(&mut self, reader: &mut FramedRead<R, McsCodec>) -> Result<(), String>
     where
         R: AsyncRead + Unpin,
     {
@@ -26,8 +26,10 @@ impl<W: AsyncWrite + Unpin> ChatClient<W> {
 
         match reader.next().await {
             Some(Ok(Message::Chat(msg))) => println!("{}", msg.content),
-            Some(Ok(Message::Error(err))) => println!("Server rejected join: {:?}", err),
+            Some(Ok(Message::Error(err))) => return Err(err),
             _ => println!("Connection closed by server during join."),
         }
+
+        Ok(())
     }
 }

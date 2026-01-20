@@ -75,7 +75,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (network_tx, mut ui_rx) = mpsc::unbounded_channel::<ChatEvent>();
 
     let mut client = ChatClient::new(writer, username.clone());
-    client.connect(&mut framed_reader).await;
+    if let Err(e) = client.connect(&mut framed_reader).await {
+        eprintln!("{}", e);
+        return Ok(());
+    }
 
     let net_notifier = network_tx.clone();
     tokio::spawn(async move {
