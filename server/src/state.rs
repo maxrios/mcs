@@ -1,12 +1,7 @@
-use std::{
-    io::{self, Write},
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
-use crate::db::Database;
+use crate::{db::Database, error::Error};
 
-use chrono::{TimeZone, Utc};
 use dashmap::DashMap;
 use protocol::{ChatPacket, Message};
 use tokio::{
@@ -23,14 +18,20 @@ pub struct ChatServer {
 }
 
 impl ChatServer {
-    pub async fn new(database_url: &str) -> Self {
+    pub async fn new(database_url: &str) -> Result<Self, Error> {
         let (tx, _) = broadcast::channel(100);
+        let db = match Database::new(database_url).await {
+            Ok(db) => db,
+            Err(e) => {
+                return Err(Error::Database(e));
+            }
+        };
 
-        Self {
+        Ok(Self {
             channel_tx: tx,
             active_users: Arc::new(DashMap::new()),
-            db: Database::new(database_url).await,
-        }
+            db,
+        })
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Message> {
@@ -47,33 +48,25 @@ impl ChatServer {
         }
     }
 
-    pub async fn broadcast(&self, msg: ChatPacket) {
-        let datetime = Utc
-            .timestamp_opt(msg.timestamp, 0)
-            .single()
-            .expect("Invalid timestamp");
-        if msg.sender == "server" {
-            print!("[{}] {}", datetime, msg.content);
-        } else {
-            println!("[{}] {}: {}", datetime, msg.sender, msg.content);
-        }
-        io::stdout().flush().unwrap();
-
+    pub async fn broadcast(&self, msg: ChatPacket) -> Result<(), Error> {
         if let Err(e) = self.db.save_message(&msg).await {
-            eprintln!("Failed to save message: {}", e);
-            return;
+            return Err(Error::Database(e));
         }
 
-        let _ = self.channel_tx.send(Message::Chat(msg));
+        if let Err(e) = self.channel_tx.send(Message::Chat(msg)) {
+            return Err(Error::Network(e));
+        }
+
+        Ok(())
     }
 
-    pub async fn register_user(&self, name: &str) -> Result<(), String> {
+    pub async fn register_user(&self, name: &str) -> Result<(), Error> {
         if name.len() < 3 {
-            return Err("Username too short".into());
+            return Err(Error::UsernameTooShort(name.to_string()));
         }
 
         if self.active_users.contains_key(name) || name == "server" || name == "client" {
-            return Err("Username taken".into());
+            return Err(Error::UsernameTaken(name.to_string()));
         }
 
         self.active_users.insert(name.into(), Instant::now());
@@ -112,11 +105,15 @@ impl ChatServer {
                 }
 
                 for name in timed_out_users {
-                    self.broadcast(ChatPacket::new_server_packet(format!(
-                        "{} timed out.",
-                        name
-                    )))
-                    .await;
+                    if let Err(e) = self
+                        .broadcast(ChatPacket::new_server_packet(format!(
+                            "{} timed out.",
+                            name
+                        )))
+                        .await
+                    {
+                        eprintln!("{}", e);
+                    }
                 }
             }
         });
@@ -137,7 +134,11 @@ mod test {
 
     async fn setup_test_server() -> Arc<ChatServer> {
         let db_url = "postgres://postgres:password@localhost:5432/postgres";
-        Arc::new(ChatServer::new(db_url).await)
+        Arc::new(
+            ChatServer::new(db_url)
+                .await
+                .expect("Failed to initialize test database"),
+        )
     }
 
     #[tokio::test]
@@ -150,7 +151,8 @@ mod test {
                 "user_1".to_string(),
                 "test".to_string(),
             ))
-            .await;
+            .await
+            .expect("failed to broadcast message");
 
         match rx.recv().await {
             Ok(Message::Chat(msg)) => {

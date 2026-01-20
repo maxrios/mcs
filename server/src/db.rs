@@ -1,5 +1,5 @@
 use protocol::ChatPacket;
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{Error, PgPool, Row, postgres::PgPoolOptions};
 
 #[derive(Clone)]
 pub struct Database {
@@ -7,7 +7,7 @@ pub struct Database {
 }
 
 impl Database {
-    pub async fn new(database_url: &str) -> Self {
+    pub async fn new(database_url: &str) -> Result<Self, Error> {
         let pool = PgPoolOptions::new()
             .max_connections(5)
             .connect(database_url)
@@ -25,13 +25,12 @@ impl Database {
             "#,
         )
         .execute(&pool)
-        .await
-        .expect("Failed to initialize database schema");
+        .await?;
 
-        Self { pool }
+        Ok(Self { pool })
     }
 
-    pub async fn save_message(&self, msg: &ChatPacket) -> Result<(), sqlx::Error> {
+    pub async fn save_message(&self, msg: &ChatPacket) -> Result<(), Error> {
         sqlx::query("INSERT INTO messages (sender, content, timestamp) VALUES ($1, $2, $3)")
             .bind(&msg.sender)
             .bind(&msg.content)
@@ -41,7 +40,7 @@ impl Database {
         Ok(())
     }
 
-    pub async fn get_recent_messages(&self) -> Result<Vec<ChatPacket>, sqlx::Error> {
+    pub async fn get_recent_messages(&self) -> Result<Vec<ChatPacket>, Error> {
         let rows = sqlx::query(
             "SELECT sender, content, timestamp FROM messages ORDER BY id DESC LIMIT 50",
         )

@@ -14,8 +14,11 @@ use tokio::{
 };
 
 mod db;
+mod error;
 mod state;
 use state::ChatServer;
+
+use crate::error::Error;
 
 #[tokio::main]
 async fn main() {
@@ -29,22 +32,45 @@ async fn main() {
 
     let certs = load_certs("tls/server.cert");
     let keys = load_keys("tls/server.key");
-
     let tls_config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, keys)
         .expect("bad certificate or key");
+
     let acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
-    let server = Arc::new(ChatServer::new(&database_url).await);
+    let server = match ChatServer::new(&database_url).await {
+        Ok(server) => Arc::new(server),
+        Err(e) => {
+            eprintln!("Failed to initilize database: {}", e);
+            return;
+        }
+    };
     server.clone().spawn_reaper();
 
-    let listener = TcpListener::bind(host).await.unwrap();
-
-    println!("Server running on {}", host);
+    let listener = match TcpListener::bind(host).await {
+        Ok(listener) => {
+            println!("Server running on {}", host);
+            listener
+        }
+        Err(e) => {
+            eprintln!("Server failed to bind to host: {}", e);
+            return;
+        }
+    };
 
     loop {
-        let (socket, _) = listener.accept().await.unwrap();
+        let (socket, _) = match listener.accept().await {
+            Ok((socket, addr)) => {
+                println!("Connecting user at {}:{}", addr.ip(), addr.port());
+                (socket, addr)
+            }
+            Err(e) => {
+                eprintln!("Connection failed: {}", e);
+                continue;
+            }
+        };
+
         let acceptor = acceptor.clone();
         let server_ref = Arc::clone(&server);
 
@@ -77,7 +103,7 @@ async fn handle_registration<W>(
     server: &Arc<ChatServer>,
     writer: &mut FramedWrite<W, McsCodec>,
     name: &str,
-) -> Result<(), ()>
+) -> Result<(), Error>
 where
     W: AsyncWrite + Unpin + Send + Sync + 'static,
 {
@@ -89,9 +115,12 @@ where
                 )))
                 .await;
 
-            server
+            if let Err(e) = server
                 .broadcast(ChatPacket::new_server_packet(format!("{} joined.\n", name)))
-                .await;
+                .await
+            {
+                eprintln!("{}", e);
+            }
 
             let history = server.get_history().await;
             for packet in history {
@@ -101,8 +130,8 @@ where
             Ok(())
         }
         Err(e) => {
-            let _ = writer.send(Message::Error(e)).await;
-            Err(())
+            let _ = writer.send(Message::Error(e.to_string())).await;
+            Err(e)
         }
     }
 }
@@ -123,8 +152,11 @@ async fn handle_session<R, W>(
             result = reader.next() => {
                 match result {
                     Some(Ok(msg)) => match msg {
-                        Message::Chat(text) => server.broadcast(text).await,
-
+                        Message::Chat(text) => {
+                            if let Err(e) = server.broadcast(text).await {
+                                eprintln!("{}", e);
+                            }
+                        },
                         Message::Heartbeat => {
                             if !server.heartbeat(name).await {
                                 break;
@@ -143,9 +175,12 @@ async fn handle_session<R, W>(
         }
     }
     server.remove_user(name).await;
-    server
+    if let Err(e) = server
         .broadcast(ChatPacket::new_server_packet(format!("{} left.\n", name)))
-        .await;
+        .await
+    {
+        eprintln!("{}", e);
+    }
 }
 
 fn load_certs(path: &str) -> Vec<CertificateDer<'static>> {
