@@ -6,6 +6,8 @@ use tokio_util::{
     codec::{Decoder, Encoder},
 };
 
+pub mod error;
+
 pub struct McsCodec;
 
 #[derive(Debug, Clone)]

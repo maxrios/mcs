@@ -1,9 +1,10 @@
-use protocol::Message;
+use crate::Message;
 use thiserror::Error;
 use tokio::sync::broadcast::error::SendError;
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[cfg(feature = "server")]
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 
