@@ -1,9 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
-use crate::db::Database;
+use crate::{db::Database, error::Error};
 
 use dashmap::DashMap;
-use protocol::{ChatPacket, Message, error::Error};
+use protocol::{ChatPacket, Message};
 use tokio::{
     sync::broadcast,
     time::{Instant, interval},

@@ -7,7 +7,7 @@ edition = "2024"
 chrono = "0.4.42"
 dashmap = "6.1.0"
 futures = "0.3.31"
-protocol = { path = "../protocol", features = ["server"] }
+protocol = { path = "../protocol" }
 rustls = { version = "0.23.35", features = ["ring"] }
 rustls-pemfile = "2.2.0"
 rustls-pki-types = "1.13.2"
@@ -16,3 +16,4 @@ tokio-rustls = "0.26.4"
 tokio-util = {version = "0.7.17", features = ["codec"]}
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres"] }
 dotenvy = "0.15.7"
+thiserror = "2.0.18"

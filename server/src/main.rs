@@ -1,20 +1,24 @@
 use std::{env, fs::File, io::BufReader, sync::Arc};
 
 use futures::{SinkExt, StreamExt};
-use protocol::{ChatPacket, McsCodec, Message, error::Error};
+use protocol::{ChatPacket, McsCodec, Message};
 use rustls::{ServerConfig, crypto::ring};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use tokio_rustls::TlsAcceptor;
+use tokio_util::codec::{FramedRead, FramedWrite};
+
 use tokio::{
     io::{AsyncRead, AsyncWrite, split},
     net::TcpListener,
 };
-use tokio_rustls::TlsAcceptor;
-use tokio_util::codec::{FramedRead, FramedWrite};
 
 mod db;
+mod error;
 mod state;
 use state::ChatServer;
+
+use crate::error::Error;
 
 #[tokio::main]
 async fn main() {
