@@ -62,7 +62,7 @@ impl ChatEvent {
     fn format_time<'a>(timestamp: i64) -> Option<DelayedFormat<StrftimeItems<'a>>> {
         let utc_datetime = Utc.timestamp_opt(timestamp, 0).single()?;
         let local_datetime = utc_datetime.with_timezone(&Local);
-        Some(local_datetime.format("%D %l:%m %p"))
+        Some(local_datetime.format("%D %l:%M %p"))
     }
 }
 

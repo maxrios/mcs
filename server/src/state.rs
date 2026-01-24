@@ -53,9 +53,7 @@ impl ChatServer {
             return Err(Error::Database(e));
         }
 
-        if let Err(e) = self.channel_tx.send(Message::Chat(msg)) {
-            return Err(Error::Network(e));
-        }
+        let _ = self.channel_tx.send(Message::Chat(msg));
 
         Ok(())
     }

@@ -28,9 +28,9 @@ impl<W: AsyncWrite + Unpin> ChatClient<W> {
         let _ = self.writer.send(Message::Join(self.username.clone())).await;
 
         match reader.next().await {
-            Some(Ok(Message::Chat(msg))) => println!("{}", msg.content),
             Some(Ok(Message::Error(err))) => return Err(err),
-            _ => println!("Connection closed by server during join."),
+            None => println!("Connection closed by server during join."),
+            _ => {}
         }
 
         Ok(())
