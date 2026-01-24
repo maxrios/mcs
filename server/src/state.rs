@@ -1,6 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
-use crate::{db::Database, error::Error};
+use crate::{
+    db::Database,
+    error::{Error, Result},
+};
 
 use dashmap::DashMap;
 use protocol::{ChatPacket, Message};
@@ -18,7 +21,7 @@ pub struct ChatServer {
 }
 
 impl ChatServer {
-    pub async fn new(database_url: &str) -> Result<Self, Error> {
+    pub async fn new(database_url: &str) -> Result<Self> {
         let (tx, _) = broadcast::channel(100);
         let db = match Database::new(database_url).await {
             Ok(db) => db,
@@ -38,17 +41,14 @@ impl ChatServer {
         self.channel_tx.subscribe()
     }
 
-    pub async fn get_history(&self) -> Vec<ChatPacket> {
+    pub async fn get_history(&self) -> Result<Vec<ChatPacket>> {
         match self.db.get_recent_messages().await {
-            Ok(msgs) => msgs,
-            Err(e) => {
-                eprintln!("Failed to retrieve messages: {}", e);
-                Vec::new()
-            }
+            Ok(msgs) => Ok(msgs),
+            Err(e) => Err(Error::Database(e)),
         }
     }
 
-    pub async fn broadcast(&self, msg: ChatPacket) -> Result<(), Error> {
+    pub async fn broadcast(&self, msg: ChatPacket) -> Result<()> {
         if let Err(e) = self.db.save_message(&msg).await {
             return Err(Error::Database(e));
         }
@@ -60,7 +60,7 @@ impl ChatServer {
         Ok(())
     }
 
-    pub async fn register_user(&self, name: &str) -> Result<(), Error> {
+    pub async fn register_user(&self, name: &str) -> Result<()> {
         if name.len() < 3 {
             return Err(Error::UsernameTooShort(name.to_string()));
         }

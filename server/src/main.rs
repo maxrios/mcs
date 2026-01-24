@@ -18,7 +18,7 @@ mod error;
 mod state;
 use state::ChatServer;
 
-use crate::error::Error;
+use crate::error::{Error, Result};
 
 #[tokio::main]
 async fn main() {
@@ -121,26 +121,18 @@ async fn handle_registration<W>(
     server: &Arc<ChatServer>,
     writer: &mut FramedWrite<W, McsCodec>,
     name: &str,
-) -> Result<(), Error>
+) -> Result<()>
 where
     W: AsyncWrite + Unpin + Send + Sync + 'static,
 {
     match server.register_user(name).await {
         Ok(_) => {
-            let _ = writer
-                .send(Message::Chat(ChatPacket::new_server_packet(
-                    "Connected!".to_string(),
-                )))
-                .await;
-
-            if let Err(e) = server
+            server
                 .broadcast(ChatPacket::new_server_packet(format!("{} joined.\n", name)))
-                .await
-            {
-                eprintln!("{}", e);
-            }
+                .await?;
 
-            let history = server.get_history().await;
+            let history = server.get_history().await?;
+
             for packet in history {
                 let _ = writer.send(Message::Chat(packet)).await;
             }
@@ -204,7 +196,7 @@ async fn handle_session<R, W>(
     }
 }
 
-fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>, Error> {
+fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(e) => return Err(Error::IO(e)),
@@ -213,7 +205,7 @@ fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>, Error> {
     Ok(certs(&mut reader).map(|result| result.unwrap()).collect())
 }
 
-fn load_keys(path: &str) -> Result<PrivateKeyDer<'static>, Error> {
+fn load_keys(path: &str) -> Result<PrivateKeyDer<'static>> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(e) => return Err(Error::IO(e)),
