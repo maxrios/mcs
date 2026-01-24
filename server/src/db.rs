@@ -11,8 +11,7 @@ impl Database {
         let pool = PgPoolOptions::new()
             .max_connections(5)
             .connect(database_url)
-            .await
-            .expect("Failed to connect to the database");
+            .await?;
 
         sqlx::query(
             r#"
