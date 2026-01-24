@@ -1,4 +1,4 @@
-use protocol::Message;
+use protocol::{ChatError, Message};
 use thiserror::Error;
 use tokio::sync::broadcast::error::SendError;
 
@@ -18,4 +18,15 @@ pub enum Error {
 
     #[error("username '{0}' is too short")]
     UsernameTooShort(String),
+}
+
+impl Error {
+    pub fn to_chat_error(&self) -> ChatError {
+        match self {
+            Error::Network(_) => ChatError::Network,
+            Error::UsernameTaken(_) => ChatError::UsernameTaken,
+            Error::UsernameTooShort(_) => ChatError::UsernameTooShort,
+            _ => ChatError::Internal,
+        }
+    }
 }

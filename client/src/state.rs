@@ -1,5 +1,5 @@
 use futures::{SinkExt, StreamExt};
-use protocol::{McsCodec, Message};
+use protocol::{ChatError, McsCodec, Message};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{FramedRead, FramedWrite};
 
@@ -18,7 +18,10 @@ impl<W: AsyncWrite + Unpin> ChatClient<W> {
         }
     }
 
-    pub async fn connect<R>(&mut self, reader: &mut FramedRead<R, McsCodec>) -> Result<(), String>
+    pub async fn connect<R>(
+        &mut self,
+        reader: &mut FramedRead<R, McsCodec>,
+    ) -> Result<(), ChatError>
     where
         R: AsyncRead + Unpin,
     {

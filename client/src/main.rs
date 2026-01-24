@@ -1,3 +1,7 @@
+use chrono::{
+    Local, TimeZone, Utc,
+    format::{DelayedFormat, StrftimeItems},
+};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
@@ -5,7 +9,7 @@ use crossterm::{
 };
 use futures::{SinkExt, StreamExt};
 use protocol::{ChatPacket, McsCodec, Message};
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{Terminal, backend::CrosstermBackend, style::Color};
 use rustls::{ClientConfig, RootCertStore, crypto::ring};
 use rustls_pemfile::certs;
 use rustls_pki_types::ServerName;
@@ -26,9 +30,40 @@ use app::ChatApp;
 use state::ChatClient;
 
 enum ChatEvent {
-    MessageReceived(ChatPacket),
+    UserMessage(ChatPacket),
     SystemMessage(ChatPacket),
     Error(String),
+}
+
+impl ChatEvent {
+    pub fn to_colored_string(event: &ChatEvent) -> Option<(String, Color)> {
+        match event {
+            ChatEvent::UserMessage(msg) => Some((
+                format!(
+                    "[{}] {}: {}",
+                    ChatEvent::format_time(msg.timestamp)?,
+                    msg.sender,
+                    msg.content
+                ),
+                Color::White,
+            )),
+            ChatEvent::SystemMessage(msg) => Some((
+                format!(
+                    "[{}] {}",
+                    ChatEvent::format_time(msg.timestamp)?,
+                    msg.content
+                ),
+                Color::Gray,
+            )),
+            ChatEvent::Error(err) => Some((err.to_string(), Color::Red)),
+        }
+    }
+
+    fn format_time<'a>(timestamp: i64) -> Option<DelayedFormat<StrftimeItems<'a>>> {
+        let utc_datetime = Utc.timestamp_opt(timestamp, 0).single()?;
+        let local_datetime = utc_datetime.with_timezone(&Local);
+        Some(local_datetime.format("%D %l:%m %p"))
+    }
 }
 
 #[tokio::main]
@@ -37,6 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         panic!("Failed to set default CryptoProvider");
     }
 
+    let host = "0.0.0.0:64400";
     let args: Vec<String> = std::env::args().collect();
     let username = match args.get(1) {
         Some(u) => u.clone(),
@@ -58,10 +94,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
 
-    let stream = match TcpStream::connect("0.0.0.0:64400").await {
+    let stream = match TcpStream::connect(host).await {
         Ok(res) => res,
         Err(_) => {
-            eprintln!("Error: Could not connect to server at 0.0.0.0:64400");
+            eprintln!("Could not connect to server at {}", host);
             return Ok(());
         }
     };
@@ -89,10 +125,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 result = framed_reader.next() => {
                     match result {
                         Some(Ok(Message::Chat(msg))) => {
-                            let _ = net_notifier.send(ChatEvent::MessageReceived(msg));
+                            if msg.sender == "server" {
+                                let _ = net_notifier.send(ChatEvent::SystemMessage(msg));
+                            } else {
+                                let _ = net_notifier.send(ChatEvent::UserMessage(msg));
+                            }
                         }
                         Some(Ok(Message::Error(err))) => {
-                            let _ = net_notifier.send(ChatEvent::Error(format!("Server Error: {}", err)));
+                            let _ = net_notifier.send(ChatEvent::Error(err.to_string()));
                         }
                         None => {
                             let _ = net_notifier.send(
@@ -104,13 +144,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 Some(msg) = network_rx.recv() => {
-                    if let Err(e) = client.writer.send(Message::Chat(msg)).await {
-                        let _ = net_notifier.send(ChatEvent::Error(format!("Failed to send message: {}", e)));
+                    if client.writer.send(Message::Chat(msg)).await.is_err() {
+                        let _ = net_notifier.send(ChatEvent::Error("Failed to send message".to_string()));
                     }
                 }
                 _ = heartbeat_timer.tick() => {
-                    if let Err(e) = client.writer.send(Message::Heartbeat).await {
-                            let _ = net_notifier.send(ChatEvent::Error(format!("Heartbeat failed: {}", e)));
+                    if client.writer.send(Message::Heartbeat).await.is_err() {
+                            let _ = net_notifier.send(ChatEvent::Error("Connection lost".to_string()));
                     }
                 }
             }
@@ -129,21 +169,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         terminal.draw(|f| app.update_ui(f))?;
 
         while let Ok(event) = ui_rx.try_recv() {
-            match event {
-                ChatEvent::MessageReceived(msg) => {
-                    app.messages.push(msg);
-                    app.scroll = app.scroll.saturating_add(1);
-                }
-                ChatEvent::SystemMessage(msg) => {
-                    app.messages.push(msg);
-                    app.scroll = app.scroll.saturating_add(1);
-                }
-                ChatEvent::Error(err) => {
-                    app.messages
-                        .push(ChatPacket::new_server_packet(format!("ERROR: {}", err)));
-                    app.scroll = app.scroll.saturating_add(1);
-                }
-            }
+            app.messages.push(event);
+            app.scroll = app.scroll.saturating_add(1);
         }
 
         if event::poll(Duration::from_millis(50))?

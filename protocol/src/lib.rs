@@ -1,6 +1,8 @@
 use std::io::{Error, ErrorKind::InvalidData};
 
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tokio_util::{
     bytes::{Buf, BufMut, BytesMut},
     codec::{Decoder, Encoder},
@@ -15,12 +17,27 @@ pub struct ChatPacket {
     pub timestamp: i64,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Error)]
+pub enum ChatError {
+    #[error("network error")]
+    Network,
+
+    #[error("username already taken")]
+    UsernameTaken,
+
+    #[error("username too short")]
+    UsernameTooShort,
+
+    #[error("internal error")]
+    Internal,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     Chat(ChatPacket),
     Join(String),
     Heartbeat,
-    Error(String),
+    Error(ChatError),
 }
 
 impl Decoder for McsCodec {
@@ -68,7 +85,7 @@ impl Decoder for McsCodec {
             }
             3 => Ok(Option::from(Message::Heartbeat)),
             4 => {
-                let s = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
+                let s = postcard::from_bytes(&payload).map_err(|_| InvalidData)?;
                 Ok(Option::from(Message::Error(s)))
             }
             _ => Err(Error::new(InvalidData, "Unknown type")),
@@ -84,8 +101,6 @@ impl Encoder<Message> for McsCodec {
             Message::Chat(packet) => {
                 let sender_bytes = packet.sender.as_bytes();
                 let content_bytes = packet.content.as_bytes();
-
-                // timestamp length + sender length + sender bytes + content bytes
                 let payload_length = 12 + sender_bytes.len() + content_bytes.len();
 
                 dst.put_u8(0x01);
@@ -105,10 +120,11 @@ impl Encoder<Message> for McsCodec {
                 dst.put_u8(0x03);
                 dst.put_u32(0u32);
             }
-            Message::Error(text) => {
-                let payload = text.as_bytes();
+            Message::Error(err) => {
+                let ser = postcard::to_vec::<_, 1>(&err).unwrap();
+                let payload: &[u8] = ser.as_slice();
                 dst.put_u8(0x04);
-                dst.put_u32(text.len() as u32);
+                dst.put_u32(payload.len() as u32);
                 dst.extend_from_slice(payload);
             }
         }
@@ -136,6 +152,7 @@ impl ChatPacket {
 
 #[cfg(test)]
 mod tests {
+    use crate::ChatError;
     use crate::ChatPacket;
 
     use super::McsCodec;
@@ -144,7 +161,7 @@ mod tests {
     use tokio_util::codec::{Decoder, Encoder};
 
     #[test]
-    fn encode_decode_cycle_succeeds() {
+    fn encode_decode_chat_succeeds() {
         let mut buf = BytesMut::new();
         let sender = "sender".to_string();
         let content = "Some Message".to_string();
@@ -155,13 +172,31 @@ mod tests {
         let decode_msg = McsCodec
             .decode(&mut buf)
             .unwrap()
-            .expect("Should return a message");
+            .expect("should return a message");
 
         if let Message::Chat(msg) = decode_msg {
             assert_eq!(msg.sender, sender);
             assert_eq!(msg.content, content);
         } else {
-            panic!("Decoded wrong message type");
+            panic!("decoded wrong message type");
+        }
+    }
+
+    #[test]
+    fn encode_decode_error_succeeds() {
+        let mut buf = BytesMut::new();
+        let original_error = Message::Error(ChatError::UsernameTaken);
+
+        McsCodec.encode(original_error.clone(), &mut buf).unwrap();
+        let decode_msg = McsCodec
+            .decode(&mut buf)
+            .unwrap()
+            .expect("should return an error");
+
+        if let Message::Error(err) = decode_msg {
+            assert_eq!(err, ChatError::UsernameTaken);
+        } else {
+            panic!("decoded wrong error type");
         }
     }
 

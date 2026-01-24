@@ -148,7 +148,7 @@ where
             Ok(())
         }
         Err(e) => {
-            let _ = writer.send(Message::Error(e.to_string())).await;
+            let _ = writer.send(Message::Error(e.to_chat_error())).await;
             Err(e)
         }
     }
@@ -172,7 +172,7 @@ async fn handle_session<R, W>(
                     Some(Ok(msg)) => match msg {
                         Message::Chat(text) => {
                             if let Err(e) = server.broadcast(text).await {
-                                if let Err(e2) = writer.send(Message::Error(e.to_string())).await {
+                                if let Err(e2) = writer.send(Message::Error(e.to_chat_error())).await {
                                     eprintln!("failed to notify user of error: {}", e2);
                                 }
                                 eprintln!("{}", e);
