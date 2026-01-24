@@ -1,7 +1,7 @@
-use futures::{SinkExt, StreamExt};
+use futures::SinkExt;
 use protocol::{ChatError, McsCodec, Message};
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_util::codec::{FramedRead, FramedWrite};
+use tokio::io::AsyncWrite;
+use tokio_util::codec::FramedWrite;
 
 type MessageWriter<W> = FramedWrite<W, McsCodec>;
 
@@ -18,20 +18,15 @@ impl<W: AsyncWrite + Unpin> ChatClient<W> {
         }
     }
 
-    pub async fn connect<R>(
-        &mut self,
-        reader: &mut FramedRead<R, McsCodec>,
-    ) -> Result<(), ChatError>
-    where
-        R: AsyncRead + Unpin,
-    {
-        let _ = self.writer.send(Message::Join(self.username.clone())).await;
-
-        match reader.next().await {
-            Some(Ok(Message::Error(err))) => return Err(err),
-            None => println!("Connection closed by server during join."),
-            _ => {}
-        }
+    pub async fn connect(&mut self) -> Result<(), ChatError> {
+        if self
+            .writer
+            .send(Message::Join(self.username.clone()))
+            .await
+            .is_err()
+        {
+            return Err(ChatError::Network);
+        };
 
         Ok(())
     }

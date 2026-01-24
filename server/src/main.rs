@@ -7,6 +7,8 @@ use rustls_pemfile::{certs, pkcs8_private_keys};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::{FramedRead, FramedWrite};
+use tracing::{error, info, warn};
+use tracing_subscriber::util::SubscriberInitExt;
 
 use tokio::{
     io::{AsyncRead, AsyncWrite, split},
@@ -17,11 +19,20 @@ mod db;
 mod error;
 mod state;
 use state::ChatServer;
+use tracing_subscriber::layer::SubscriberExt;
 
 use crate::error::{Error, Result};
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "server=info".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
     if ring::default_provider().install_default().is_err() {
         panic!("failed to set default CryptoProvider");
     }
@@ -33,14 +44,14 @@ async fn main() {
     let certs = match load_certs("tls/server.cert") {
         Ok(certs) => certs,
         Err(e) => {
-            eprintln!("failed to load certs: {}", e);
+            error!(%e, "failed to load certs");
             return;
         }
     };
     let keys = match load_keys("tls/server.key") {
         Ok(keys) => keys,
         Err(e) => {
-            eprintln!("failed to load keys: {}", e);
+            error!(%e, "failed to load keys");
             return;
         }
     };
@@ -50,7 +61,7 @@ async fn main() {
     {
         Ok(config) => config,
         Err(e) => {
-            eprintln!("failed to set single cert and match private keys: {}", e);
+            error!(%e, "failed to set single cert and match private keys");
             return;
         }
     };
@@ -60,7 +71,7 @@ async fn main() {
     let server = match ChatServer::new(&database_url).await {
         Ok(server) => Arc::new(server),
         Err(e) => {
-            eprintln!("failed to initilize database: {}", e);
+            error!(%e, "failed to initilize database");
             return;
         }
     };
@@ -68,23 +79,20 @@ async fn main() {
 
     let listener = match TcpListener::bind(host).await {
         Ok(listener) => {
-            println!("server running on {}", host);
+            info!(%host, "server running");
             listener
         }
         Err(e) => {
-            eprintln!("server failed to bind to host: {}", e);
+            error!(%e, "server failed to bind to host");
             return;
         }
     };
 
     loop {
-        let (socket, _) = match listener.accept().await {
-            Ok((socket, addr)) => {
-                println!("connecting user at {}:{}", addr.ip(), addr.port());
-                (socket, addr)
-            }
+        let (socket, addr) = match listener.accept().await {
+            Ok((socket, addr)) => (socket, addr),
             Err(e) => {
-                eprintln!("connection failed: {}", e);
+                warn!(%e, "connection failed");
                 continue;
             }
         };
@@ -96,7 +104,7 @@ async fn main() {
             let stream = match acceptor.accept(socket).await {
                 Ok(stream) => stream,
                 Err(e) => {
-                    eprintln!("TLS handshake failed: {}", e);
+                    error!(%e, "TLS handshake failed");
                     return;
                 }
             };
@@ -111,6 +119,7 @@ async fn main() {
                     .await
                     .is_ok()
             {
+                info!(ip = %addr.ip(), port = %addr.port(), name = %name, "connected user");
                 handle_session(&name, framed_reader, framed_writer, server_ref).await;
             }
         });
@@ -165,9 +174,9 @@ async fn handle_session<R, W>(
                         Message::Chat(text) => {
                             if let Err(e) = server.broadcast(text).await {
                                 if let Err(e2) = writer.send(Message::Error(e.to_chat_error())).await {
-                                    eprintln!("failed to notify user of error: {}", e2);
+                                    warn!(%e2, "failed to notify user of error");
                                 }
-                                eprintln!("{}", e);
+                                error!(%e, "broadcast error");
                             }
                         },
                         Message::Heartbeat => {
@@ -192,7 +201,7 @@ async fn handle_session<R, W>(
         .broadcast(ChatPacket::new_server_packet(format!("{} left.\n", name)))
         .await
     {
-        eprintln!("{}", e);
+        error!(%e, "failed to broadcast user leave");
     }
 }
 

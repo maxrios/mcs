@@ -111,7 +111,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (network_tx, mut ui_rx) = mpsc::unbounded_channel::<ChatEvent>();
 
     let mut client = ChatClient::new(writer, username.clone());
-    if let Err(e) = client.connect(&mut framed_reader).await {
+    if let Err(e) = client.connect().await {
         eprintln!("{}", e);
         return Ok(());
     }

@@ -11,6 +11,7 @@ use tokio::{
     sync::broadcast,
     time::{Instant, interval},
 };
+use tracing::error;
 
 type UserHeartbeatMap = Arc<DashMap<String, Instant>>;
 
@@ -110,7 +111,7 @@ impl ChatServer {
                         )))
                         .await
                     {
-                        eprintln!("{}", e);
+                        error!(user = %name, %e, "failed to broadcast user timeout");
                     }
                 }
             }
