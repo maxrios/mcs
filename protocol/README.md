@@ -45,4 +45,10 @@ Sent when an operation fails (e.g., username taken).
 
 **Payload Layout:**
 
-1. **Error Message** (Bytes): UTF-8 string (entire payload).
+1. **Serialized ChatError** (Bytes): A `ChatError` enum serialized using [Postcard](https://github.com/jamesmunns/postcard).
+
+**ChatError Variants:**
+* `Network`
+* `UsernameTaken`
+* `UsernameTooShort`
+* `Internal`
