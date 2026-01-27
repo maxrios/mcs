@@ -1,4 +1,15 @@
 services:
+  lb:
+    image: nginx:latest
+    ports:
+      - "64400:64400"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - server
+    networks:
+      - mcs-net
+
   db:
     image: postgres:latest
     container_name: mcs-postgres
@@ -13,16 +24,22 @@ services:
 
   server:
     build: .
-    container_name: mcs-server
-    ports:
-      - "64400:64400"
+    deploy:
+      replicas: 2
     volumes:
       - ./tls:/app/tls
     environment:
       DATABASE_URL: postgres://postgres:password@db:5432/postgres
+      REDIS_URL: redis://redis:6379
     depends_on:
       - db
+      - redis
     restart: on-failure
+    networks:
+      - mcs-net
+
+  redis:
+    image: redis:alpine
     networks:
       - mcs-net
 

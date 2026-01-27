@@ -17,6 +17,7 @@ use tokio::{
 
 mod db;
 mod error;
+mod redis;
 mod state;
 use state::ChatServer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -40,6 +41,7 @@ async fn main() {
     let host = "0.0.0.0:64400";
     let database_url = env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:password@localhost:5432/postgres".to_string());
+    let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
     let certs = match load_certs("tls/server.cert") {
         Ok(certs) => certs,
@@ -68,14 +70,13 @@ async fn main() {
 
     let acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
-    let server = match ChatServer::new(&database_url).await {
+    let server = match ChatServer::new(&database_url, &redis_url).await {
         Ok(server) => Arc::new(server),
         Err(e) => {
             error!(%e, "failed to initilize database");
             return;
         }
     };
-    server.clone().spawn_watchdog();
 
     let listener = match TcpListener::bind(host).await {
         Ok(listener) => {
@@ -180,8 +181,8 @@ async fn handle_session<R, W>(
                             }
                         },
                         Message::Heartbeat => {
-                            if !server.heartbeat(name).await {
-                                break;
+                            if let Err(e) = server.heartbeat(name).await {
+                                error!(%e, "redis error");
                             }
                         }
                         _ => break
@@ -196,7 +197,10 @@ async fn handle_session<R, W>(
             }
         }
     }
-    server.remove_user(name).await;
+    if let Err(e) = server.remove_user(name).await {
+        error!(%e, "failed to remove user");
+    }
+
     if let Err(e) = server
         .broadcast(ChatPacket::new_server_packet(format!("{} left.\n", name)))
         .await

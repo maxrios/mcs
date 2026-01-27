@@ -15,6 +15,12 @@ pub enum Error {
     #[error("network error: {0}")]
     Network(#[from] SendError<Message>),
 
+    #[error("serialization error: {0}")]
+    Serialization(#[from] postcard::Error),
+
+    #[error("redis error: {0}")]
+    Redis(#[from] redis::RedisError),
+
     #[error("username '{0}' is already taken")]
     UsernameTaken(String),
 

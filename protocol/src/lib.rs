@@ -10,11 +10,19 @@ use tokio_util::{
 
 pub struct McsCodec;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatPacket {
     pub sender: String,
     pub content: String,
     pub timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Message {
+    Chat(ChatPacket),
+    Join(String),
+    Heartbeat,
+    Error(ChatError),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Error)]
@@ -30,14 +38,6 @@ pub enum ChatError {
 
     #[error("internal error")]
     Internal,
-}
-
-#[derive(Debug, Clone)]
-pub enum Message {
-    Chat(ChatPacket),
-    Join(String),
-    Heartbeat,
-    Error(ChatError),
 }
 
 impl Decoder for McsCodec {
