@@ -1,3 +1,5 @@
+#![warn(clippy::all, clippy::pedantic, clippy::nursery, unused_extern_crates)]
+
 use chrono::{
     Local, TimeZone, Utc,
     format::{DelayedFormat, StrftimeItems},
@@ -36,26 +38,22 @@ enum ChatEvent {
 }
 
 impl ChatEvent {
-    pub fn to_colored_string(event: &ChatEvent) -> Option<(String, Color)> {
-        match event {
-            ChatEvent::UserMessage(msg) => Some((
+    pub fn to_colored_string(&self) -> Option<(String, Color)> {
+        match self {
+            Self::UserMessage(msg) => Some((
                 format!(
                     "[{}] {}: {}",
-                    ChatEvent::format_time(msg.timestamp)?,
+                    Self::format_time(msg.timestamp)?,
                     msg.sender,
                     msg.content
                 ),
                 Color::White,
             )),
-            ChatEvent::SystemMessage(msg) => Some((
-                format!(
-                    "[{}] {}",
-                    ChatEvent::format_time(msg.timestamp)?,
-                    msg.content
-                ),
+            Self::SystemMessage(msg) => Some((
+                format!("[{}] {}", Self::format_time(msg.timestamp)?, msg.content),
                 Color::Gray,
             )),
-            ChatEvent::Error(err) => Some((err.to_string(), Color::Red)),
+            Self::Error(err) => Some((err.clone(), Color::Red)),
         }
     }
 
@@ -69,17 +67,14 @@ impl ChatEvent {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     if ring::default_provider().install_default().is_err() {
-        panic!("Failed to set default CryptoProvider");
+        eprintln!("Failed to set default CryptoProvider");
     }
 
     let host = "0.0.0.0:64400";
     let args: Vec<String> = std::env::args().collect();
-    let username = match args.get(1) {
-        Some(u) => u.clone(),
-        None => {
-            eprintln!("Usage: chat <username>");
-            return Ok(());
-        }
+    let Some(username) = args.get(1) else {
+        eprintln!("Usage: chat <username>");
+        return Ok(());
     };
 
     let mut root_store = RootCertStore::empty();
@@ -94,12 +89,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
 
-    let stream = match TcpStream::connect(host).await {
-        Ok(res) => res,
-        Err(_) => {
-            eprintln!("Could not connect to server at {}", host);
-            return Ok(());
-        }
+    let Ok(stream) = TcpStream::connect(host).await else {
+        eprintln!("Could not connect to server at {host}");
+        return Ok(());
     };
 
     let domain = ServerName::try_from("localhost")?;
@@ -112,7 +104,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut client = ChatClient::new(writer, username.clone());
     if let Err(e) = client.connect().await {
-        eprintln!("{}", e);
+        eprintln!("{e}");
         return Ok(());
     }
 

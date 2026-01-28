@@ -26,7 +26,7 @@ impl<W: AsyncWrite + Unpin> ChatClient<W> {
             .is_err()
         {
             return Err(ChatError::Network);
-        };
+        }
 
         Ok(())
     }

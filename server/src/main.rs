@@ -1,3 +1,5 @@
+#![warn(clippy::all, clippy::pedantic, clippy::nursery, unused_extern_crates)]
+
 use std::{env, fs::File, io::BufReader, sync::Arc};
 
 use futures::{SinkExt, StreamExt};
@@ -35,7 +37,7 @@ async fn main() {
         .init();
 
     if ring::default_provider().install_default().is_err() {
-        panic!("failed to set default CryptoProvider");
+        warn!("crypto provider already exists");
     }
 
     let host = "0.0.0.0:64400";
@@ -136,9 +138,9 @@ where
     W: AsyncWrite + Unpin + Send + Sync + 'static,
 {
     match server.register_user(name).await {
-        Ok(_) => {
+        Ok(()) => {
             server
-                .broadcast(ChatPacket::new_server_packet(format!("{} joined.\n", name)))
+                .broadcast(ChatPacket::new_server_packet(format!("{name} joined.\n")))
                 .await?;
 
             let history = server.get_history().await?;
@@ -202,7 +204,7 @@ async fn handle_session<R, W>(
     }
 
     if let Err(e) = server
-        .broadcast(ChatPacket::new_server_packet(format!("{} left.\n", name)))
+        .broadcast(ChatPacket::new_server_packet(format!("{name} left.\n")))
         .await
     {
         error!(%e, "failed to broadcast user leave");

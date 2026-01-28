@@ -29,11 +29,11 @@ pub enum Error {
 }
 
 impl Error {
-    pub fn to_chat_error(&self) -> ChatError {
+    pub const fn to_chat_error(&self) -> ChatError {
         match self {
-            Error::Network(_) => ChatError::Network,
-            Error::UsernameTaken(_) => ChatError::UsernameTaken,
-            Error::UsernameTooShort(_) => ChatError::UsernameTooShort,
+            Self::Network(_) => ChatError::Network,
+            Self::UsernameTaken(_) => ChatError::UsernameTaken,
+            Self::UsernameTooShort(_) => ChatError::UsernameTooShort,
             _ => ChatError::Internal,
         }
     }

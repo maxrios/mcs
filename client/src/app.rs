@@ -20,7 +20,7 @@ pub struct ChatApp {
 }
 
 impl ChatApp {
-    pub fn new(username: String, network_tx: mpsc::UnboundedSender<ChatPacket>) -> Self {
+    pub const fn new(username: String, network_tx: mpsc::UnboundedSender<ChatPacket>) -> Self {
         Self {
             username,
             input: String::new(),
@@ -41,6 +41,7 @@ impl ChatApp {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     pub fn update_ui(&mut self, f: &mut Frame) {
         let input_height = self.get_input_height(f);
         let frame_width = f.area().width.saturating_sub(2) as usize;
@@ -52,10 +53,9 @@ impl ChatApp {
 
         let mut total_lines = 0u16;
         let mut message_lines = Vec::new();
-        for m in self.messages.iter() {
-            let (text, color) = match ChatEvent::to_colored_string(m) {
-                Some(text) => text,
-                None => continue,
+        for m in &self.messages {
+            let Some((text, color)) = ChatEvent::to_colored_string(m) else {
+                continue;
             };
 
             message_lines.push(Line::from(Span::styled(
@@ -109,7 +109,8 @@ impl ChatApp {
         f.set_cursor_position((chunks[1].x + cursor_x + 1, chunks[1].y + cursor_y + 1));
     }
 
-    fn get_input_height(&self, f: &Frame) -> u16 {
+    #[allow(clippy::cast_possible_truncation)]
+    const fn get_input_height(&self, f: &Frame) -> u16 {
         let area = f.area();
 
         let text_width = area.width.saturating_sub(2) as usize;
@@ -123,7 +124,8 @@ impl ChatApp {
         input_lines + 2
     }
 
-    fn get_cursor_position(&self, f: &Frame) -> (u16, u16) {
+    #[allow(clippy::cast_possible_truncation)]
+    const fn get_cursor_position(&self, f: &Frame) -> (u16, u16) {
         let area = f.area();
 
         let text_width = area.width.saturating_sub(2) as usize;

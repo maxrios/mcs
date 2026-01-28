@@ -16,7 +16,7 @@ impl Redis {
         let client = Client::open(redis_url)?;
         let conn = client.get_multiplexed_async_connection().await?;
 
-        Redis::spawn_pubsub_task(sender.clone(), client.clone());
+        Self::spawn_pubsub_task(sender.clone(), client.clone());
 
         Ok(Self { conn })
     }
@@ -56,7 +56,7 @@ impl Redis {
     }
 
     pub async fn set(&self, name: &str) -> Result<bool> {
-        let key = format!("user:session:{}", name);
+        let key = format!("user:session:{name}");
         let mut conn = self.conn.clone();
         Ok(redis::cmd("SET")
             .arg(&key)
@@ -69,13 +69,13 @@ impl Redis {
     }
 
     pub async fn del(&self, name: &str) -> Result<()> {
-        let key = format!("user:session:{}", name);
+        let key = format!("user:session:{name}");
         let mut conn = self.conn.clone();
         Ok(redis::cmd("DEL").arg(key).query_async(&mut conn).await?)
     }
 
     pub async fn expire(&self, name: &str) -> Result<()> {
-        let key = format!("user:session:{}", name);
+        let key = format!("user:session:{name}");
         let mut conn = self.conn.clone();
         Ok(redis::cmd("EXPIRE")
             .arg(&key)

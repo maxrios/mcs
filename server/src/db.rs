@@ -14,14 +14,14 @@ impl Database {
             .await?;
 
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS messages (
                 id SERIAL PRIMARY KEY,
                 sender TEXT NOT NULL,
                 content TEXT NOT NULL,
                 timestamp BIGINT NOT NULL
             );
-            "#,
+            ",
         )
         .execute(&pool)
         .await?;

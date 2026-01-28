@@ -1,3 +1,5 @@
+#![warn(clippy::all, clippy::pedantic, clippy::nursery, unused_extern_crates)]
+
 use std::io::{Error, ErrorKind::InvalidData};
 
 use chrono::Utc;
@@ -25,7 +27,7 @@ pub enum Message {
     Error(ChatError),
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Error)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Error)]
 pub enum ChatError {
     #[error("network error")]
     Network,
@@ -96,6 +98,7 @@ impl Decoder for McsCodec {
 impl Encoder<Message> for McsCodec {
     type Error = Error;
 
+    #[allow(clippy::cast_possible_truncation)]
     fn encode(&mut self, item: Message, dst: &mut BytesMut) -> Result<(), Self::Error> {
         match item {
             Message::Chat(packet) => {
@@ -133,16 +136,18 @@ impl Encoder<Message> for McsCodec {
 }
 
 impl ChatPacket {
-    pub fn new_server_packet(content: String) -> ChatPacket {
-        ChatPacket {
+    #[must_use]
+    pub fn new_server_packet(content: String) -> Self {
+        Self {
             sender: "server".to_string(),
             content,
             timestamp: Utc::now().timestamp(),
         }
     }
 
-    pub fn new_user_packet(sender: String, content: String) -> ChatPacket {
-        ChatPacket {
+    #[must_use]
+    pub fn new_user_packet(sender: String, content: String) -> Self {
+        Self {
             sender,
             content,
             timestamp: Utc::now().timestamp(),
@@ -168,7 +173,7 @@ mod tests {
         let original_msg =
             Message::Chat(ChatPacket::new_user_packet(sender.clone(), content.clone()));
 
-        McsCodec.encode(original_msg.clone(), &mut buf).unwrap();
+        McsCodec.encode(original_msg, &mut buf).unwrap();
         let decode_msg = McsCodec
             .decode(&mut buf)
             .unwrap()
@@ -187,7 +192,7 @@ mod tests {
         let mut buf = BytesMut::new();
         let original_error = Message::Error(ChatError::UsernameTaken);
 
-        McsCodec.encode(original_error.clone(), &mut buf).unwrap();
+        McsCodec.encode(original_error, &mut buf).unwrap();
         let decode_msg = McsCodec
             .decode(&mut buf)
             .unwrap()
