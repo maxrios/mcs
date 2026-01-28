@@ -22,8 +22,13 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::{io::split, net::TcpStream, sync::mpsc, time::interval};
-use tokio_rustls::TlsConnector;
+use tokio::{
+    io::split,
+    net::TcpStream,
+    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    time::interval,
+};
+use tokio_rustls::{TlsConnector, client::TlsStream};
 use tokio_util::codec::FramedRead;
 
 mod app;
@@ -96,58 +101,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let domain = ServerName::try_from("localhost")?;
     let stream = connector.connect(domain, stream).await?;
-
-    let (reader, writer) = split(stream);
-    let mut framed_reader = FramedRead::new(reader, McsCodec);
-    let (ui_tx, mut network_rx) = mpsc::unbounded_channel::<ChatPacket>();
+    let (ui_tx, network_rx) = mpsc::unbounded_channel::<ChatPacket>();
     let (network_tx, mut ui_rx) = mpsc::unbounded_channel::<ChatEvent>();
 
-    let mut client = ChatClient::new(writer, username.clone());
-    if let Err(e) = client.connect().await {
-        eprintln!("{e}");
-        return Ok(());
-    }
-
-    let net_notifier = network_tx.clone();
-    tokio::spawn(async move {
-        let mut heartbeat_timer = interval(Duration::from_secs(10));
-
-        loop {
-            tokio::select! {
-                result = framed_reader.next() => {
-                    match result {
-                        Some(Ok(Message::Chat(msg))) => {
-                            if msg.sender == "server" {
-                                let _ = net_notifier.send(ChatEvent::SystemMessage(msg));
-                            } else {
-                                let _ = net_notifier.send(ChatEvent::UserMessage(msg));
-                            }
-                        }
-                        Some(Ok(Message::Error(err))) => {
-                            let _ = net_notifier.send(ChatEvent::Error(err.to_string()));
-                        }
-                        None => {
-                            let _ = net_notifier.send(
-                                ChatEvent::SystemMessage(
-                                    ChatPacket::new_server_packet("Connection closed by server.".to_string())));
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                Some(msg) = network_rx.recv() => {
-                    if client.writer.send(Message::Chat(msg)).await.is_err() {
-                        let _ = net_notifier.send(ChatEvent::Error("Failed to send message".to_string()));
-                    }
-                }
-                _ = heartbeat_timer.tick() => {
-                    if client.writer.send(Message::Heartbeat).await.is_err() {
-                            let _ = net_notifier.send(ChatEvent::Error("Connection lost".to_string()));
-                    }
-                }
-            }
-        }
-    });
+    spawn_event_listener(stream, username, network_tx.clone(), network_rx).await;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -198,4 +155,60 @@ async fn main() -> Result<(), Box<dyn Error>> {
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+async fn spawn_event_listener(
+    stream: TlsStream<TcpStream>,
+    username: &str,
+    network_tx: UnboundedSender<ChatEvent>,
+    mut network_rx: UnboundedReceiver<ChatPacket>,
+) {
+    let (reader, writer) = split(stream);
+
+    let mut client = ChatClient::new(writer, username.into());
+    if let Err(e) = client.connect().await {
+        eprintln!("{e}");
+        return;
+    }
+
+    let mut framed_reader = FramedRead::new(reader, McsCodec);
+    tokio::spawn(async move {
+        let mut heartbeat_timer = interval(Duration::from_secs(10));
+
+        loop {
+            tokio::select! {
+                result = framed_reader.next() => {
+                    match result {
+                        Some(Ok(Message::Chat(msg))) => {
+                            if msg.sender == "server" {
+                                let _ = network_tx.send(ChatEvent::SystemMessage(msg));
+                            } else {
+                                let _ = network_tx.send(ChatEvent::UserMessage(msg));
+                            }
+                        }
+                        Some(Ok(Message::Error(err))) => {
+                            let _ = network_tx.send(ChatEvent::Error(err.to_string()));
+                        }
+                        None => {
+                            let _ = network_tx.send(
+                                ChatEvent::SystemMessage(
+                                    ChatPacket::new_server_packet("Connection closed by server.".to_string())));
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                Some(msg) = network_rx.recv() => {
+                    if client.writer.send(Message::Chat(msg)).await.is_err() {
+                        let _ = network_tx.send(ChatEvent::Error("Failed to send message".to_string()));
+                    }
+                }
+                _ = heartbeat_timer.tick() => {
+                    if client.writer.send(Message::Heartbeat).await.is_err() {
+                            let _ = network_tx.send(ChatEvent::Error("Connection lost".to_string()));
+                    }
+                }
+            }
+        }
+    });
 }
