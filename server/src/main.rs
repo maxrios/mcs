@@ -41,7 +41,7 @@ async fn main() {
     }
 
     let host = "0.0.0.0:64400";
-    let database_url = env::var("DATABASE_URL")
+    let database_url = env::var("POSTGRES_URL")
         .unwrap_or_else(|_| "postgres://postgres:password@localhost:5432/postgres".to_string());
     let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 

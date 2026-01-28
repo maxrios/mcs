@@ -2,7 +2,7 @@ services:
   lb:
     image: nginx:latest
     ports:
-      - "64400:64400"
+      - "${MCS_PORT}:${MCS_PORT}"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
@@ -14,9 +14,9 @@ services:
     image: postgres:latest
     container_name: mcs-postgres
     environment:
-      POSTGRES_PASSWORD: password
-      POSTGRES_USER: postgres
-      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: $POSTGRES_PASSWORD
+      POSTGRES_USER: $POSTGRES_USER
+      POSTGRES_DB: $POSTGRES_DB
     ports:
       - "5432:5432"
     networks:
@@ -29,8 +29,8 @@ services:
     volumes:
       - ./tls:/app/tls
     environment:
-      DATABASE_URL: postgres://postgres:password@db:5432/postgres
-      REDIS_URL: redis://redis:6379
+      POSTGRES_URL: $POSTGRES_URL
+      REDIS_URL: $REDIS_URL
     depends_on:
       - db
       - redis
