@@ -1,17 +1,15 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery, unused_extern_crates)]
 
-use chrono::{
-    Local, TimeZone, Utc,
-    format::{DelayedFormat, StrftimeItems},
-};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use futures::{SinkExt, StreamExt};
 use protocol::{ChatPacket, McsCodec, Message};
-use ratatui::{Terminal, backend::CrosstermBackend, style::Color};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use rustls::{ClientConfig, RootCertStore, crypto::ring};
 use rustls_pemfile::certs;
 use rustls_pki_types::ServerName;
@@ -33,40 +31,13 @@ use tokio_util::codec::FramedRead;
 
 mod app;
 mod state;
-use app::ChatApp;
-use state::ChatClient;
+use app::{AppState, ChatApp};
+use state::{ChatClient, ChatEvent};
 
-enum ChatEvent {
-    UserMessage(ChatPacket),
-    SystemMessage(ChatPacket),
-    Error(String),
-}
-
-impl ChatEvent {
-    pub fn to_colored_string(&self) -> Option<(String, Color)> {
-        match self {
-            Self::UserMessage(msg) => Some((
-                format!(
-                    "[{}] {}: {}",
-                    Self::format_time(msg.timestamp)?,
-                    msg.sender,
-                    msg.content
-                ),
-                Color::White,
-            )),
-            Self::SystemMessage(msg) => Some((
-                format!("[{}] {}", Self::format_time(msg.timestamp)?, msg.content),
-                Color::Gray,
-            )),
-            Self::Error(err) => Some((err.clone(), Color::Red)),
-        }
-    }
-
-    fn format_time<'a>(timestamp: i64) -> Option<DelayedFormat<StrftimeItems<'a>>> {
-        let utc_datetime = Utc.timestamp_opt(timestamp, 0).single()?;
-        let local_datetime = utc_datetime.with_timezone(&Local);
-        Some(local_datetime.format("%D %l:%M %p"))
-    }
+enum KeyEventResult {
+    Connect,
+    Continue,
+    Break,
 }
 
 #[tokio::main]
@@ -75,36 +46,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         eprintln!("Failed to set default CryptoProvider");
     }
 
-    let host = "0.0.0.0:64400";
-    let args: Vec<String> = std::env::args().collect();
-    let Some(username) = args.get(1) else {
-        eprintln!("Usage: chat <username>");
-        return Ok(());
-    };
-
     let mut root_store = RootCertStore::empty();
     let file = File::open("tls/ca.cert").expect("Failed to open cert");
     let mut reader = BufReader::new(file);
     for cert in certs(&mut reader) {
         let _ = root_store.add(cert?);
     }
-
     let config = ClientConfig::builder()
         .with_root_certificates(root_store)
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
 
-    let Ok(stream) = TcpStream::connect(host).await else {
-        eprintln!("Could not connect to server at {host}");
-        return Ok(());
-    };
-
-    let domain = ServerName::try_from("localhost")?;
-    let stream = connector.connect(domain, stream).await?;
     let (ui_tx, network_rx) = mpsc::unbounded_channel::<ChatPacket>();
     let (network_tx, mut ui_rx) = mpsc::unbounded_channel::<ChatEvent>();
 
-    spawn_event_listener(stream, username, network_tx.clone(), network_rx).await;
+    let mut pending_network_rx = Some(network_rx);
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -112,7 +68,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let term_backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(term_backend)?;
 
-    let mut app = ChatApp::new(username.clone(), ui_tx);
+    let mut app = ChatApp::new(ui_tx);
 
     loop {
         terminal.draw(|f| app.update_ui(f))?;
@@ -126,22 +82,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
-            match key.code {
-                KeyCode::Enter => app.submit_message(),
-                KeyCode::Char(c) => app.input.push(c),
-                KeyCode::Backspace => {
-                    app.input.pop();
+            match handle_key_event_with_optional_connect(key, &mut app) {
+                KeyEventResult::Connect => {
+                    init_tcp_connection(&mut app, &connector, &mut pending_network_rx, &network_tx)
+                        .await;
                 }
-                KeyCode::Up => {
-                    app.scroll = app.scroll.saturating_sub(1);
-                }
-                KeyCode::Down => {
-                    if app.scroll < app.scroll_limit {
-                        app.scroll = app.scroll.saturating_add(1);
-                    }
-                }
-                KeyCode::Esc => break,
-                _ => {}
+                KeyEventResult::Continue => {}
+                KeyEventResult::Break => break,
             }
         }
     }
@@ -157,6 +104,43 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+async fn init_tcp_connection(
+    app: &mut ChatApp,
+    connector: &TlsConnector,
+    pending_network_rx: &mut Option<UnboundedReceiver<ChatPacket>>,
+    network_tx: &UnboundedSender<ChatEvent>,
+) {
+    let ip = app.login_ip.clone();
+    let user = app.login_user.clone();
+    let target = format!("{ip}:64400");
+
+    match TcpStream::connect(&target).await {
+        Ok(stream) => match ServerName::try_from(ip.clone()) {
+            Ok(domain) => match connector.connect(domain, stream).await {
+                Ok(tls_stream) => {
+                    app.username = user;
+                    app.state = AppState::Chat;
+                    app.connection_error = None;
+
+                    if let Some(rx) = pending_network_rx.take() {
+                        spawn_event_listener(tls_stream, &app.username, network_tx.clone(), rx)
+                            .await;
+                    }
+                }
+                Err(e) => {
+                    app.connection_error = Some(format!("TLS Error: {e}"));
+                }
+            },
+            Err(e) => {
+                app.connection_error = Some(format!("Invalid IP for Cert: {e}"));
+            }
+        },
+        Err(e) => {
+            app.connection_error = Some(format!("Connection Failed: {e}"));
+        }
+    }
+}
+
 async fn spawn_event_listener(
     stream: TlsStream<TcpStream>,
     username: &str,
@@ -167,7 +151,7 @@ async fn spawn_event_listener(
 
     let mut client = ChatClient::new(writer, username.into());
     if let Err(e) = client.connect().await {
-        eprintln!("{e}");
+        let _ = network_tx.send(ChatEvent::Error(format!("Handshake error: {e}")));
         return;
     }
 
@@ -211,4 +195,55 @@ async fn spawn_event_listener(
             }
         }
     });
+}
+
+fn handle_key_event_with_optional_connect(key: KeyEvent, app: &mut ChatApp) -> KeyEventResult {
+    match app.state {
+        AppState::Login => match key.code {
+            KeyCode::Tab => {
+                app.login_field_idx = (app.login_field_idx + 1) % 2;
+            }
+            KeyCode::Char(c) => {
+                if app.login_field_idx == 0 {
+                    app.login_ip.push(c);
+                } else {
+                    app.login_user.push(c);
+                }
+            }
+            KeyCode::Backspace => {
+                if app.login_field_idx == 0 {
+                    app.login_ip.pop();
+                } else {
+                    app.login_user.pop();
+                }
+            }
+            KeyCode::Enter => {
+                if !app.login_ip.is_empty() && !app.login_user.is_empty() {
+                    return KeyEventResult::Connect;
+                }
+                app.connection_error = Some("Fields cannot be empty".to_string());
+            }
+            KeyCode::Esc => return KeyEventResult::Break,
+            _ => {}
+        },
+        AppState::Chat => match key.code {
+            KeyCode::Enter => app.submit_message(),
+            KeyCode::Char(c) => app.input.push(c),
+            KeyCode::Backspace => {
+                app.input.pop();
+            }
+            KeyCode::Up => {
+                app.scroll = app.scroll.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                if app.scroll < app.scroll_limit {
+                    app.scroll = app.scroll.saturating_add(1);
+                }
+            }
+            KeyCode::Esc => return KeyEventResult::Break,
+            _ => {}
+        },
+    }
+
+    KeyEventResult::Continue
 }
