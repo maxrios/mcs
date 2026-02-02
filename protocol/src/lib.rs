@@ -1,6 +1,6 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery, unused_extern_crates)]
 
-use std::io::{Error, ErrorKind::InvalidData};
+use std::io::Error;
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -47,51 +47,26 @@ impl Decoder for McsCodec {
     type Error = Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if src.len() < 5 {
+        if src.len() < 4 {
             return Ok(None);
         }
 
         let mut length_bytes = [0u8; 4];
-        length_bytes.copy_from_slice(&src[1..5]);
+        length_bytes.copy_from_slice(&src[0..4]);
         let length = u32::from_be_bytes(length_bytes) as usize;
 
-        if src.len() < 5 + length {
+        if src.len() < 4 + length {
+            src.reserve(4 + length - src.len());
             return Ok(None);
         }
 
-        let msg_type = src.get_u8();
         src.advance(4);
-        let mut payload = src.split_to(length);
+        let payload = src.split_to(length);
 
-        match msg_type {
-            1 => {
-                if payload.remaining() < 12 {
-                    return Err(Error::new(InvalidData, "Payload too short for ChatPacket"));
-                }
+        let message = postcard::from_bytes(&payload)
+            .map_err(|_| Error::new(std::io::ErrorKind::InvalidData, "deserialzation failed"))?;
 
-                let timestamp = payload.get_i64();
-                let name_length = payload.get_u32() as usize;
-                let name_bytes = payload.split_to(name_length);
-                let sender = String::from_utf8(name_bytes.to_vec()).map_err(|_| InvalidData)?;
-                let content = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
-
-                Ok(Option::from(Message::Chat(ChatPacket {
-                    sender,
-                    content,
-                    timestamp,
-                })))
-            }
-            2 => {
-                let s = String::from_utf8(payload.to_vec()).map_err(|_| InvalidData)?;
-                Ok(Option::from(Message::Join(s)))
-            }
-            3 => Ok(Option::from(Message::Heartbeat)),
-            4 => {
-                let s = postcard::from_bytes(&payload).map_err(|_| InvalidData)?;
-                Ok(Option::from(Message::Error(s)))
-            }
-            _ => Err(Error::new(InvalidData, "Unknown type")),
-        }
+        Ok(Some(message))
     }
 }
 
@@ -100,37 +75,11 @@ impl Encoder<Message> for McsCodec {
 
     #[allow(clippy::cast_possible_truncation)]
     fn encode(&mut self, item: Message, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        match item {
-            Message::Chat(packet) => {
-                let sender_bytes = packet.sender.as_bytes();
-                let content_bytes = packet.content.as_bytes();
-                let payload_length = 12 + sender_bytes.len() + content_bytes.len();
+        let payload = postcard::to_stdvec(&item)
+            .map_err(|_| Error::new(std::io::ErrorKind::InvalidData, "serialization failed"))?;
+        dst.put_u32(payload.len() as u32);
+        dst.extend_from_slice(&payload);
 
-                dst.put_u8(0x01);
-                dst.put_u32(payload_length as u32);
-                dst.put_i64(packet.timestamp);
-                dst.put_u32(sender_bytes.len() as u32);
-                dst.extend_from_slice(sender_bytes);
-                dst.extend_from_slice(content_bytes);
-            }
-            Message::Join(username) => {
-                let payload = username.as_bytes();
-                dst.put_u8(0x02);
-                dst.put_u32(username.len() as u32);
-                dst.extend_from_slice(payload);
-            }
-            Message::Heartbeat => {
-                dst.put_u8(0x03);
-                dst.put_u32(0u32);
-            }
-            Message::Error(err) => {
-                let ser = postcard::to_vec::<_, 1>(&err).unwrap();
-                let payload: &[u8] = ser.as_slice();
-                dst.put_u8(0x04);
-                dst.put_u32(payload.len() as u32);
-                dst.extend_from_slice(payload);
-            }
-        }
         Ok(())
     }
 }
