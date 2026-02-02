@@ -30,8 +30,8 @@ impl ChatServer {
         self.channel_tx.subscribe()
     }
 
-    pub async fn get_history(&self) -> Result<Vec<ChatPacket>> {
-        Ok(self.db.get_recent_messages().await?)
+    pub async fn get_history(&self, timestamp: i64) -> Result<Vec<ChatPacket>> {
+        Ok(self.db.get_recent_messages(timestamp).await?)
     }
 
     pub async fn broadcast(&self, msg: ChatPacket) -> Result<()> {

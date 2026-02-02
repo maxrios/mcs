@@ -14,6 +14,7 @@ pub enum ChatEvent {
     UserMessage(ChatPacket),
     SystemMessage(ChatPacket),
     Error(String),
+    HistoryBatch(Vec<ChatPacket>),
 }
 
 impl ChatEvent {
@@ -33,6 +34,7 @@ impl ChatEvent {
                 Color::Gray,
             )),
             Self::Error(err) => Some((err.clone(), Color::Red)),
+            Self::HistoryBatch(_) => None,
         }
     }
 

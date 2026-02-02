@@ -139,14 +139,13 @@ where
 {
     match server.register_user(name).await {
         Ok(()) => {
-            server
-                .broadcast(ChatPacket::new_server_packet(format!("{name} joined.\n")))
-                .await?;
+            let join_message = ChatPacket::new_server_packet(format!("{name} joined.\n"));
+            let join_message_time = join_message.timestamp;
+            server.broadcast(join_message).await?;
 
-            let history = server.get_history().await?;
-
-            for packet in history {
-                let _ = writer.send(Message::Chat(packet)).await;
+            let history = server.get_history(join_message_time + 1).await?;
+            if let Err(e) = writer.send(Message::HistoryResponse(history)).await {
+                warn!(%e, "failed to notify user of error");
             }
 
             Ok(())
@@ -185,6 +184,21 @@ async fn handle_session<R, W>(
                         Message::Heartbeat => {
                             if let Err(e) = server.heartbeat(name).await {
                                 error!(%e, "redis error");
+                            }
+                        }
+                        Message::HistoryRequest(timestamp) => {
+                            match server.get_history(timestamp).await {
+                                Ok(history) => {
+                                    if let Err(e) = writer.send(Message::HistoryResponse(history)).await {
+                                        warn!(%e, "failed to send history");
+                                    }
+                                }
+                                Err(e) => {
+                                    if let Err(e2) = writer.send(Message::Error(e.to_chat_error())).await {
+                                        warn!(%e2, "failed to notify user of error");
+                                    }
+                                    error!(%e, "broadcast error");
+                                }
                             }
                         }
                         _ => break

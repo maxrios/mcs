@@ -1,4 +1,4 @@
-use protocol::ChatPacket;
+use protocol::{ChatPacket, Message};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
@@ -21,7 +21,7 @@ pub struct ChatApp {
     pub username: String,
     pub input: String,
     pub messages: Vec<ChatEvent>,
-    pub network_tx: mpsc::UnboundedSender<ChatPacket>,
+    pub network_tx: mpsc::UnboundedSender<Message>,
     pub scroll: u16,
     pub scroll_limit: u16,
 
@@ -32,7 +32,7 @@ pub struct ChatApp {
 }
 
 impl ChatApp {
-    pub const fn new(network_tx: mpsc::UnboundedSender<ChatPacket>) -> Self {
+    pub const fn new(network_tx: mpsc::UnboundedSender<Message>) -> Self {
         Self {
             state: AppState::Login,
             username: String::new(),
@@ -50,12 +50,27 @@ impl ChatApp {
 
     pub fn submit_message(&mut self) {
         if !self.input.trim().is_empty() {
-            let _ = self.network_tx.send(ChatPacket::new_user_packet(
-                self.username.clone(),
-                self.input.clone(),
-            ));
+            let _ = self
+                .network_tx
+                .send(Message::Chat(ChatPacket::new_user_packet(
+                    self.username.clone(),
+                    self.input.clone(),
+                )));
             self.input.clear();
         }
+    }
+
+    pub fn request_history(&self) {
+        let oldest_ts = self
+            .messages
+            .first()
+            .and_then(|e| match e {
+                ChatEvent::UserMessage(p) | ChatEvent::SystemMessage(p) => Some(p.timestamp),
+                _ => None,
+            })
+            .unwrap_or_else(|| chrono::Utc::now().timestamp());
+
+        let _ = self.network_tx.send(Message::HistoryRequest(oldest_ts));
     }
 
     pub fn update_ui(&mut self, f: &mut Frame) {
@@ -65,8 +80,26 @@ impl ChatApp {
         }
     }
 
+    pub fn handle_history_batch(&mut self, batch: Vec<ChatPacket>, frame_width: u16) {
+        let new_events: Vec<ChatEvent> = batch
+            .into_iter()
+            .map(|p| {
+                if p.sender == "server" {
+                    ChatEvent::SystemMessage(p)
+                } else {
+                    ChatEvent::UserMessage(p)
+                }
+            })
+            .collect();
+
+        let added_height = Self::calculate_height(&new_events, frame_width);
+
+        self.messages.splice(0..0, new_events);
+
+        self.scroll = self.scroll.saturating_add(added_height);
+    }
+
     fn render_login(&self, f: &mut Frame) {
-        // Clear the background
         let area = f.area();
 
         let block = Block::default()
@@ -250,5 +283,20 @@ impl ChatApp {
         };
 
         (cursor_x, cursor_y)
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    fn calculate_height(events: &[ChatEvent], width: u16) -> u16 {
+        let mut total_lines = 0;
+        for event in events {
+            if let Some((text, _)) = event.to_colored_string() {
+                let m_len = text.len();
+                if width > 0 {
+                    let lines = ((m_len.saturating_sub(1) / width as usize) + 1) as u16;
+                    total_lines += lines;
+                }
+            }
+        }
+        total_lines
     }
 }

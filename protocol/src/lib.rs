@@ -25,6 +25,8 @@ pub enum Message {
     Join(String),
     Heartbeat,
     Error(ChatError),
+    HistoryRequest(i64),
+    HistoryResponse(Vec<ChatPacket>),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Error)]

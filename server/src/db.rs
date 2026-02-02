@@ -39,10 +39,11 @@ impl Database {
         Ok(())
     }
 
-    pub async fn get_recent_messages(&self) -> Result<Vec<ChatPacket>, Error> {
+    pub async fn get_recent_messages(&self, timestamp: i64) -> Result<Vec<ChatPacket>, Error> {
         let rows = sqlx::query(
-            "SELECT sender, content, timestamp FROM messages ORDER BY id DESC LIMIT 50",
+            "SELECT sender, content, timestamp FROM messages WHERE timestamp < $1 ORDER BY timestamp DESC LIMIT 50",
         )
+        .bind(timestamp)
         .fetch_all(&self.pool)
         .await?;
 

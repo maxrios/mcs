@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
 
-    let (ui_tx, network_rx) = mpsc::unbounded_channel::<ChatPacket>();
+    let (ui_tx, network_rx) = mpsc::unbounded_channel::<Message>();
     let (network_tx, mut ui_rx) = mpsc::unbounded_channel::<ChatEvent>();
 
     let mut pending_network_rx = Some(network_rx);
@@ -74,8 +74,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         terminal.draw(|f| app.update_ui(f))?;
 
         while let Ok(event) = ui_rx.try_recv() {
-            app.messages.push(event);
-            app.scroll = app.scroll.saturating_add(1);
+            if let ChatEvent::HistoryBatch(history) = event {
+                let width = terminal.size()?.width.saturating_sub(2);
+                app.handle_history_batch(history, width);
+            } else {
+                app.messages.push(event);
+                app.scroll = app.scroll.saturating_add(1);
+            }
         }
 
         if event::poll(Duration::from_millis(50))?
@@ -107,7 +112,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn init_tcp_connection(
     app: &mut ChatApp,
     connector: &TlsConnector,
-    pending_network_rx: &mut Option<UnboundedReceiver<ChatPacket>>,
+    pending_network_rx: &mut Option<UnboundedReceiver<Message>>,
     network_tx: &UnboundedSender<ChatEvent>,
 ) {
     let ip = app.login_ip.clone();
@@ -145,7 +150,7 @@ async fn spawn_event_listener(
     stream: TlsStream<TcpStream>,
     username: &str,
     network_tx: UnboundedSender<ChatEvent>,
-    mut network_rx: UnboundedReceiver<ChatPacket>,
+    mut network_rx: UnboundedReceiver<Message>,
 ) {
     let (reader, writer) = split(stream);
 
@@ -173,6 +178,9 @@ async fn spawn_event_listener(
                         Some(Ok(Message::Error(err))) => {
                             let _ = network_tx.send(ChatEvent::Error(err.to_string()));
                         }
+                        Some(Ok(Message::HistoryResponse(history))) => {
+                            let _ = network_tx.send(ChatEvent::HistoryBatch(history));
+                        }
                         None => {
                             let _ = network_tx.send(
                                 ChatEvent::SystemMessage(
@@ -183,7 +191,7 @@ async fn spawn_event_listener(
                     }
                 }
                 Some(msg) = network_rx.recv() => {
-                    if client.writer.send(Message::Chat(msg)).await.is_err() {
+                    if client.writer.send(msg).await.is_err() {
                         let _ = network_tx.send(ChatEvent::Error("Failed to send message".to_string()));
                     }
                 }
@@ -233,7 +241,11 @@ fn handle_key_event_with_optional_connect(key: KeyEvent, app: &mut ChatApp) -> K
                 app.input.pop();
             }
             KeyCode::Up => {
-                app.scroll = app.scroll.saturating_sub(1);
+                if app.scroll == 0 {
+                    app.request_history();
+                } else {
+                    app.scroll = app.scroll.saturating_sub(1);
+                }
             }
             KeyCode::Down => {
                 if app.scroll < app.scroll_limit {
