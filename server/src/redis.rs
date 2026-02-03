@@ -45,7 +45,7 @@ impl Redis {
         });
     }
 
-    pub async fn publish(&self, msg: Message) -> Result<()> {
+    pub async fn publish_message(&self, msg: Message) -> Result<()> {
         let payload = postcard::to_stdvec(&msg)?;
         let mut conn = self.conn.clone();
         Ok(redis::cmd("PUBLISH")
@@ -55,7 +55,7 @@ impl Redis {
             .await?)
     }
 
-    pub async fn set(&self, name: &str) -> Result<bool> {
+    pub async fn set_connection(&self, name: &str) -> Result<bool> {
         let key = format!("user:session:{name}");
         let mut conn = self.conn.clone();
         Ok(redis::cmd("SET")
@@ -68,18 +68,30 @@ impl Redis {
             .await?)
     }
 
-    pub async fn del(&self, name: &str) -> Result<()> {
+    pub async fn del_connection(&self, name: &str) -> Result<()> {
         let key = format!("user:session:{name}");
         let mut conn = self.conn.clone();
         Ok(redis::cmd("DEL").arg(key).query_async(&mut conn).await?)
     }
 
-    pub async fn expire(&self, name: &str) -> Result<()> {
+    pub async fn expire_connection(&self, name: &str) -> Result<()> {
         let key = format!("user:session:{name}");
         let mut conn = self.conn.clone();
         Ok(redis::cmd("EXPIRE")
             .arg(&key)
             .arg(30)
+            .query_async(&mut conn)
+            .await?)
+    }
+
+    pub async fn register_node(&self, ip_port: &str) -> Result<()> {
+        let key = format!("mcs:node:{ip_port}");
+        let mut conn = self.conn.clone();
+        Ok(redis::cmd("SET")
+            .arg(&key)
+            .arg("online")
+            .arg("EX")
+            .arg(5)
             .query_async(&mut conn)
             .await?)
     }

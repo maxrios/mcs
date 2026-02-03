@@ -1,0 +1,10 @@
+FROM rust:latest as builder
+WORKDIR /usr/src/mcs
+COPY . .
+RUN cargo build --release -p lb
+
+FROM debian:trixie-slim
+WORKDIR /app
+COPY --from=builder /usr/src/mcs/target/release/lb /app/lb
+EXPOSE 64400
+CMD ["./lb"]

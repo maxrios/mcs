@@ -1,6 +1,8 @@
 services:
   lb:
-    image: nginx:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.lb
     ports:
       - "${MCS_PORT}:${MCS_PORT}"
     volumes:
@@ -23,7 +25,9 @@ services:
       - mcs-net
 
   server:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.server
     deploy:
       replicas: 2
     volumes:

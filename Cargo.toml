@@ -3,6 +3,7 @@ members = [
     "protocol",
     "server",
     "client",
+    "lb",
 ]
 resolver = "3"
 

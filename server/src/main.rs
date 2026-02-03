@@ -1,6 +1,6 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery, unused_extern_crates)]
 
-use std::{env, fs::File, io::BufReader, sync::Arc};
+use std::{env, fs::File, io::BufReader, sync::Arc, time::Duration};
 
 use futures::{SinkExt, StreamExt};
 use protocol::{ChatPacket, McsCodec, Message};
@@ -24,7 +24,10 @@ mod state;
 use state::ChatServer;
 use tracing_subscriber::layer::SubscriberExt;
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    redis::Redis,
+};
 
 #[tokio::main]
 async fn main() {
@@ -79,6 +82,8 @@ async fn main() {
             return;
         }
     };
+
+    spawn_heartbeat(server.redis.clone());
 
     let listener = match TcpListener::bind(host).await {
         Ok(listener) => {
@@ -245,4 +250,24 @@ fn load_keys(path: &str) -> Result<PrivateKeyDer<'static>> {
         .unwrap()
         .unwrap()
         .into())
+}
+
+fn spawn_heartbeat(redis: Redis) {
+    tokio::spawn(async move {
+        let ip = match local_ip_address::local_ip() {
+            Ok(ip) => ip,
+            Err(e) => {
+                error!(%e, "failed to get ip for heartbeat");
+                return;
+            }
+        };
+        let addr = format!("{ip}:64400");
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        loop {
+            interval.tick().await;
+            if let Err(e) = redis.register_node(&addr).await {
+                error!(%e, "failed to register node heartbeat");
+            }
+        }
+    });
 }

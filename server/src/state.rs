@@ -9,7 +9,7 @@ use tokio::sync::broadcast::{self};
 
 pub struct ChatServer {
     channel_tx: broadcast::Sender<Message>,
-    redis: Redis,
+    pub redis: Redis,
     db: Database,
 }
 
@@ -36,7 +36,7 @@ impl ChatServer {
 
     pub async fn broadcast(&self, msg: ChatPacket) -> Result<()> {
         self.db.save_message(&msg).await?;
-        self.redis.publish(Message::Chat(msg)).await
+        self.redis.publish_message(Message::Chat(msg)).await
     }
 
     pub async fn register_user(&self, name: &str) -> Result<()> {
@@ -44,7 +44,7 @@ impl ChatServer {
             return Err(Error::UsernameTooShort(name.to_string()));
         }
 
-        if !self.redis.set(name).await? || name == "server" {
+        if !self.redis.set_connection(name).await? || name == "server" {
             return Err(Error::UsernameTaken(name.to_string()));
         }
 
@@ -52,10 +52,10 @@ impl ChatServer {
     }
 
     pub async fn remove_user(&self, name: &str) -> Result<()> {
-        self.redis.del(name).await
+        self.redis.del_connection(name).await
     }
 
     pub async fn heartbeat(&self, name: &str) -> Result<()> {
-        self.redis.expire(name).await
+        self.redis.expire_connection(name).await
     }
 }
