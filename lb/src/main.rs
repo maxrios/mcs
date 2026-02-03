@@ -7,9 +7,10 @@ use std::{
     },
     time::Duration,
 };
-use tracing::{error, info};
-
 use tokio::net::{TcpListener, TcpStream};
+use tracing::{error, info, warn};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 struct LoadBalancerState {
     backends: RwLock<Vec<String>>,
@@ -17,10 +18,24 @@ struct LoadBalancerState {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "lb=info".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
     let mcs_port = std::env::var("MCS_PORT").unwrap_or_else(|_| "64400".to_string());
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://redis:6379".to_string());
-    let redis_client = redis::Client::open(redis_url)?;
+    let redis_client = match redis::Client::open(redis_url) {
+        Ok(redis_client) => redis_client,
+        Err(e) => {
+            error!(err = ?e, "failed to connect to redis");
+            return;
+        }
+    };
     let state = Arc::new(LoadBalancerState {
         backends: RwLock::new(Vec::new()),
         current_index: AtomicUsize::new(0),
@@ -32,11 +47,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
         spawn_discovery(redis_client, state_clone).await;
     });
 
-    let listener = TcpListener::bind(&host).await?;
-    info!(%host, "load balancer running");
+    let listener = match TcpListener::bind(&host).await {
+        Ok(listener) => {
+            info!(%host, "load balancer running");
+            listener
+        }
+        Err(e) => {
+            error!(%e, "load balancer failed to bind to host");
+            return;
+        }
+    };
 
     loop {
-        let (socket, addr) = listener.accept().await?;
+        let (socket, addr) = match listener.accept().await {
+            Ok((socket, addr)) => (socket, addr),
+            Err(e) => {
+                warn!(err = ?e, "connection failed");
+                continue;
+            }
+        };
         let state = state.clone();
 
         tokio::spawn(async move {

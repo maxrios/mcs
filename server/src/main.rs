@@ -1,28 +1,26 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery, unused_extern_crates)]
 
-use std::{env, fs::File, io::BufReader, sync::Arc, time::Duration};
-
 use futures::{SinkExt, StreamExt};
 use protocol::{ChatPacket, McsCodec, Message};
 use rustls::{ServerConfig, crypto::ring};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
-use tokio_rustls::TlsAcceptor;
-use tokio_util::codec::{FramedRead, FramedWrite};
-use tracing::{error, info, warn};
-use tracing_subscriber::util::SubscriberInitExt;
-
+use state::ChatServer;
+use std::{env, fs::File, io::BufReader, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncWrite, split},
     net::TcpListener,
 };
+use tokio_rustls::TlsAcceptor;
+use tokio_util::codec::{FramedRead, FramedWrite};
+use tracing::{error, info, warn};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 mod db;
 mod error;
 mod redis;
 mod state;
-use state::ChatServer;
-use tracing_subscriber::layer::SubscriberExt;
 
 use crate::{
     error::{Error, Result},
