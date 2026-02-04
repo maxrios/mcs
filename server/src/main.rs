@@ -1,7 +1,7 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery, unused_extern_crates)]
 
 use futures::{SinkExt, StreamExt};
-use protocol::{ChatPacket, McsCodec, Message};
+use protocol::{ChatPacket, JoinPacket, McsCodec, Message};
 use rustls::{ServerConfig, crypto::ring};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
@@ -81,6 +81,10 @@ async fn main() {
         }
     };
 
+    if let Err(e) = server.db.create_user("admin", "password").await {
+        warn!(err = ?e, "failed to seed admin user");
+    }
+
     spawn_heartbeat(server.redis.clone());
 
     let listener = match TcpListener::bind(host).await {
@@ -120,13 +124,14 @@ async fn main() {
             let mut framed_reader = FramedRead::new(reader, McsCodec);
             let mut framed_writer = FramedWrite::new(writer, McsCodec);
 
-            if let Some(Ok(Message::Join(name))) = framed_reader.next().await
-                && handle_registration(&server_ref, &mut framed_writer, &name)
+            if let Some(Ok(Message::Join(JoinPacket { username, password }))) =
+                framed_reader.next().await
+                && handle_registration(&server_ref, &mut framed_writer, &username, &password)
                     .await
                     .is_ok()
             {
-                info!(ip = %addr.ip(), port = %addr.port(), name = %name, "connected user");
-                handle_session(&name, framed_reader, framed_writer, server_ref).await;
+                info!(ip = %addr.ip(), port = %addr.port(), username = %username, "connected user");
+                handle_session(&username, framed_reader, framed_writer, server_ref).await;
             }
         });
     }
@@ -135,14 +140,15 @@ async fn main() {
 async fn handle_registration<W>(
     server: &Arc<ChatServer>,
     writer: &mut FramedWrite<W, McsCodec>,
-    name: &str,
+    username: &str,
+    password: &str,
 ) -> Result<()>
 where
     W: AsyncWrite + Unpin + Send + Sync + 'static,
 {
-    match server.register_user(name).await {
+    match server.register_user(username, password).await {
         Ok(()) => {
-            let join_message = ChatPacket::new_server_packet(format!("{name} joined.\n"));
+            let join_message = ChatPacket::new_server_packet(format!("{username} joined.\n"));
             let join_message_time = join_message.timestamp;
             server.broadcast(join_message).await?;
 

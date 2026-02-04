@@ -10,7 +10,7 @@ use tokio::sync::broadcast::{self};
 pub struct ChatServer {
     channel_tx: broadcast::Sender<Message>,
     pub redis: Redis,
-    db: Database,
+    pub db: Database,
 }
 
 impl ChatServer {
@@ -31,7 +31,7 @@ impl ChatServer {
     }
 
     pub async fn get_history(&self, timestamp: i64) -> Result<Vec<ChatPacket>> {
-        Ok(self.db.get_recent_messages(timestamp).await?)
+        self.db.get_recent_messages(timestamp).await
     }
 
     pub async fn broadcast(&self, msg: ChatPacket) -> Result<()> {
@@ -39,13 +39,19 @@ impl ChatServer {
         self.redis.publish_message(Message::Chat(msg)).await
     }
 
-    pub async fn register_user(&self, name: &str) -> Result<()> {
-        if name.len() < 3 {
-            return Err(Error::UsernameTooShort(name.to_string()));
+    pub async fn register_user(&self, username: &str, password: &str) -> Result<()> {
+        if username.len() < 3 {
+            return Err(Error::UsernameTooShort(username.to_string()));
         }
 
-        if !self.redis.set_connection(name).await? || name == "server" {
-            return Err(Error::UsernameTaken(name.to_string()));
+        let is_valid = self.db.verify_credentials(username, password).await?;
+
+        if !is_valid {
+            return Err(Error::InvalidCredentials);
+        }
+
+        if !self.redis.set_connection(username).await? {
+            return Err(Error::UsernameTaken("user already logged in".to_string()));
         }
 
         Ok(())

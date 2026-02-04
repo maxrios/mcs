@@ -26,6 +26,15 @@ pub enum Error {
 
     #[error("username '{0}' is too short")]
     UsernameTooShort(String),
+
+    #[error("invalid user credentials")]
+    InvalidCredentials,
+
+    #[error("encryption error: {0}")]
+    Encryption(#[from] argon2::Error),
+
+    #[error("hashing error: {0}")]
+    Hashing(#[from] argon2::password_hash::Error),
 }
 
 impl Error {
