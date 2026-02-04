@@ -117,6 +117,7 @@ async fn init_tcp_connection(
 ) {
     let ip = app.login_ip.clone();
     let user = app.login_user.clone();
+    let pass = app.login_pass.clone();
     let target = format!("{ip}:64400");
 
     match TcpStream::connect(&target).await {
@@ -128,8 +129,14 @@ async fn init_tcp_connection(
                     app.connection_error = None;
 
                     if let Some(rx) = pending_network_rx.take() {
-                        spawn_event_listener(tls_stream, &app.username, network_tx.clone(), rx)
-                            .await;
+                        spawn_event_listener(
+                            tls_stream,
+                            &app.username,
+                            &pass,
+                            network_tx.clone(),
+                            rx,
+                        )
+                        .await;
                     }
                 }
                 Err(e) => {
@@ -149,12 +156,13 @@ async fn init_tcp_connection(
 async fn spawn_event_listener(
     stream: TlsStream<TcpStream>,
     username: &str,
+    password: &str,
     network_tx: UnboundedSender<ChatEvent>,
     mut network_rx: UnboundedReceiver<Message>,
 ) {
     let (reader, writer) = split(stream);
 
-    let mut client = ChatClient::new(writer, username.into());
+    let mut client = ChatClient::new(writer, username.into(), password.into());
     if let Err(e) = client.connect().await {
         let _ = network_tx.send(ChatEvent::Error(format!("Handshake error: {e}")));
         return;
@@ -209,27 +217,34 @@ fn handle_key_event_with_optional_connect(key: KeyEvent, app: &mut ChatApp) -> K
     match app.state {
         AppState::Login => match key.code {
             KeyCode::Tab => {
-                app.login_field_idx = (app.login_field_idx + 1) % 2;
+                app.login_field_idx = (app.login_field_idx + 1) % 3;
             }
-            KeyCode::Char(c) => {
-                if app.login_field_idx == 0 {
-                    app.login_ip.push(c);
-                } else {
-                    app.login_user.push(c);
-                }
-            }
-            KeyCode::Backspace => {
-                if app.login_field_idx == 0 {
+            KeyCode::Char(c) => match app.login_field_idx {
+                0 => app.login_ip.push(c),
+                1 => app.login_user.push(c),
+                2 => app.login_pass.push(c),
+                _ => {}
+            },
+            KeyCode::Backspace => match app.login_field_idx {
+                0 => {
                     app.login_ip.pop();
-                } else {
+                }
+                1 => {
                     app.login_user.pop();
                 }
-            }
+                2 => {
+                    app.login_pass.pop();
+                }
+                _ => {}
+            },
             KeyCode::Enter => {
-                if !app.login_ip.is_empty() && !app.login_user.is_empty() {
+                if !app.login_ip.is_empty()
+                    && !app.login_user.is_empty()
+                    && !app.login_pass.is_empty()
+                {
                     return KeyEventResult::Connect;
                 }
-                app.connection_error = Some("Fields cannot be empty".to_string());
+                app.connection_error = Some("All fields are required".to_string());
             }
             KeyCode::Esc => return KeyEventResult::Break,
             _ => {}

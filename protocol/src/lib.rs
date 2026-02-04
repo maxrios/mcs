@@ -19,16 +19,6 @@ pub struct ChatPacket {
     pub timestamp: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Message {
-    Chat(ChatPacket),
-    Join(String),
-    Heartbeat,
-    Error(ChatError),
-    HistoryRequest(i64),
-    HistoryResponse(Vec<ChatPacket>),
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Error)]
 pub enum ChatError {
     #[error("network error")]
@@ -42,6 +32,22 @@ pub enum ChatError {
 
     #[error("internal error")]
     Internal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JoinPacket {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Message {
+    Chat(ChatPacket),
+    Join(JoinPacket),
+    Heartbeat,
+    Error(ChatError),
+    HistoryRequest(i64),
+    HistoryResponse(Vec<ChatPacket>),
 }
 
 impl Decoder for McsCodec {

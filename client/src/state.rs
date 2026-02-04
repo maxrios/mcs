@@ -3,7 +3,7 @@ use chrono::{
     format::{DelayedFormat, StrftimeItems},
 };
 use futures::SinkExt;
-use protocol::{ChatError, ChatPacket, McsCodec, Message};
+use protocol::{ChatError, ChatPacket, JoinPacket, McsCodec, Message};
 use ratatui::style::Color;
 use tokio::io::AsyncWrite;
 use tokio_util::codec::FramedWrite;
@@ -48,20 +48,25 @@ impl ChatEvent {
 pub struct ChatClient<W> {
     pub writer: MessageWriter<W>,
     pub username: String,
+    pub password: String,
 }
 
 impl<W: AsyncWrite + Unpin> ChatClient<W> {
-    pub fn new(writer: W, username: String) -> Self {
+    pub fn new(writer: W, username: String, password: String) -> Self {
         Self {
             writer: FramedWrite::new(writer, McsCodec),
             username,
+            password,
         }
     }
 
     pub async fn connect(&mut self) -> Result<(), ChatError> {
         if self
             .writer
-            .send(Message::Join(self.username.clone()))
+            .send(Message::Join(JoinPacket {
+                username: self.username.clone(),
+                password: self.password.clone(),
+            }))
             .await
             .is_err()
         {

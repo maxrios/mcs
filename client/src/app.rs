@@ -27,6 +27,7 @@ pub struct ChatApp {
 
     pub login_ip: String,
     pub login_user: String,
+    pub login_pass: String,
     pub login_field_idx: usize, // 0 = IP, 1 = Username
     pub connection_error: Option<String>,
 }
@@ -43,6 +44,7 @@ impl ChatApp {
             scroll_limit: 0u16,
             login_ip: String::new(),
             login_user: String::new(),
+            login_pass: String::new(),
             login_field_idx: 0,
             connection_error: None,
         }
@@ -112,7 +114,7 @@ impl ChatApp {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Fill(1),
-                Constraint::Length(13),
+                Constraint::Length(16),
                 Constraint::Fill(1),
             ])
             .split(area);
@@ -139,6 +141,7 @@ impl ChatApp {
             .direction(Direction::Vertical)
             .margin(1)
             .constraints([
+                Constraint::Length(3),
                 Constraint::Length(3),
                 Constraint::Length(3),
                 Constraint::Length(3),
@@ -173,6 +176,20 @@ impl ChatApp {
             .style(user_style);
         f.render_widget(user_text, layout[1]);
 
+        let pass_style = if self.login_field_idx == 2 {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let masked_pass = self.login_pass.chars().map(|_| '*').collect::<String>();
+        let pass_text = Paragraph::new(masked_pass)
+            .block(Block::default().borders(Borders::ALL).title(" Password "))
+            .style(pass_style);
+        f.render_widget(pass_text, layout[2]);
+
         if let Some(err) = &self.connection_error {
             let error_text =
                 Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
@@ -180,7 +197,7 @@ impl ChatApp {
         } else {
             let help_text = Paragraph::new("Tab to switch • Enter to connect • Esc to quit")
                 .style(Style::default().fg(Color::Gray));
-            f.render_widget(help_text, layout[2]);
+            f.render_widget(help_text, layout[3]);
         }
     }
 

@@ -1,6 +1,7 @@
 FROM rust:latest AS builder
 WORKDIR /usr/src/mcs
 COPY . .
+ENV SQLX_OFFLINE=true
 RUN cargo build --release -p server
 
 FROM debian:trixie-slim
