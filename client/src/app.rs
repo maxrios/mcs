@@ -193,7 +193,7 @@ impl ChatApp {
         if let Some(err) = &self.connection_error {
             let error_text =
                 Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
-            f.render_widget(error_text, layout[2]);
+            f.render_widget(error_text, layout[3]);
         } else {
             let help_text = Paragraph::new("Tab to switch • Enter to connect • Esc to quit")
                 .style(Style::default().fg(Color::Gray));
