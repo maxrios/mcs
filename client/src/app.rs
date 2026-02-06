@@ -1,319 +1,256 @@
-use protocol::{ChatPacket, Message};
-use ratatui::{
-    Frame,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
-};
+use crate::{error::Error, event::AppEvent, network::NetworkClient};
+use crossterm::event::{KeyCode, KeyEvent};
+use protocol::{ChatPacket, JoinPacket, Message};
+use std::collections::VecDeque;
 use tokio::sync::mpsc;
 
-use crate::state::ChatEvent;
+/// Maximum number of messages to keep in memory.
+const MAX_MESSAGES: usize = 500;
 
-#[derive(PartialEq, Eq)]
-pub enum AppState {
+/// Actions to be handled by the app.
+pub enum Action {
+    /// User input containing a character.
+    EnterChar(char),
+    /// User input deleting a character.
+    DeleteChar,
+    /// Message to be sent to the server.
+    Submit,
+    /// User closes the app.
+    Quit,
+    None,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum CurrentScreen {
     Login,
     Chat,
 }
 
-pub struct ChatApp {
-    pub state: AppState,
-    pub username: String,
-    pub input: String,
-    pub messages: Vec<ChatEvent>,
-    pub network_tx: mpsc::UnboundedSender<Message>,
-    pub scroll: u16,
-    pub scroll_limit: u16,
-
-    pub login_ip: String,
-    pub login_user: String,
-    pub login_pass: String,
-    pub login_field_idx: usize, // 0 = IP, 1 = Username
-    pub connection_error: Option<String>,
+#[derive(Debug, PartialEq, Eq)]
+pub enum LoginStep {
+    Ip,
+    Username,
+    Password,
 }
 
-impl ChatApp {
-    pub const fn new(network_tx: mpsc::UnboundedSender<Message>) -> Self {
+pub struct GlobalState {
+    pub screen: CurrentScreen,
+    pub should_quit: bool,
+    pub event_tx: mpsc::UnboundedSender<AppEvent>,
+}
+
+pub struct UIState {
+    pub input_buffer: String,
+    pub error_message: Option<String>,
+}
+
+pub struct ChatState {
+    pub messages: VecDeque<ChatPacket>,
+    pub network: Option<NetworkClient>,
+    pub username: String,
+}
+
+pub struct LoginState {
+    pub step: LoginStep,
+    pub ip: String,
+    pub user: String,
+}
+
+pub struct App {
+    pub global: GlobalState,
+    pub ui: UIState,
+    pub chat: ChatState,
+    pub login: LoginState,
+}
+
+impl App {
+    pub fn new(event_tx: mpsc::UnboundedSender<AppEvent>) -> Self {
         Self {
-            state: AppState::Login,
-            username: String::new(),
-            input: String::new(),
-            messages: Vec::new(),
-            network_tx,
-            scroll: 0u16,
-            scroll_limit: 0u16,
-            login_ip: String::new(),
-            login_user: String::new(),
-            login_pass: String::new(),
-            login_field_idx: 0,
-            connection_error: None,
+            global: GlobalState {
+                screen: CurrentScreen::Login,
+                should_quit: false,
+                event_tx,
+            },
+            ui: UIState {
+                input_buffer: String::new(),
+                error_message: None,
+            },
+            chat: ChatState {
+                messages: VecDeque::with_capacity(MAX_MESSAGES),
+                network: None,
+                username: String::new(),
+            },
+            login: LoginState {
+                step: LoginStep::Ip,
+                ip: String::new(),
+                user: String::new(),
+            },
         }
     }
 
-    pub fn submit_message(&mut self) {
-        if !self.input.trim().is_empty() {
-            let _ = self
-                .network_tx
-                .send(Message::Chat(ChatPacket::new_user_packet(
-                    self.username.clone(),
-                    self.input.clone(),
-                )));
-            self.input.clear();
-        }
-    }
-
-    pub fn request_history(&self) {
-        let oldest_ts = self
-            .messages
-            .first()
-            .and_then(|e| match e {
-                ChatEvent::UserMessage(p) | ChatEvent::SystemMessage(p) => Some(p.timestamp),
-                _ => None,
-            })
-            .unwrap_or_else(|| chrono::Utc::now().timestamp());
-
-        let _ = self.network_tx.send(Message::HistoryRequest(oldest_ts));
-    }
-
-    pub fn update_ui(&mut self, f: &mut Frame) {
-        match self.state {
-            AppState::Login => self.render_login(f),
-            AppState::Chat => self.render_chat(f),
-        }
-    }
-
-    pub fn handle_history_batch(&mut self, batch: Vec<ChatPacket>, frame_width: u16) {
-        let new_events: Vec<ChatEvent> = batch
-            .into_iter()
-            .map(|p| {
-                if p.sender == "server" {
-                    ChatEvent::SystemMessage(p)
-                } else {
-                    ChatEvent::UserMessage(p)
-                }
-            })
-            .collect();
-
-        let added_height = Self::calculate_height(&new_events, frame_width);
-
-        self.messages.splice(0..0, new_events);
-
-        self.scroll = self.scroll.saturating_add(added_height);
-    }
-
-    fn render_login(&self, f: &mut Frame) {
-        let area = f.area();
-
-        let block = Block::default()
-            .title(" Welcome to MCS ")
-            .borders(Borders::ALL)
-            .style(Style::default().bg(Color::Black));
-        f.render_widget(block, area);
-
-        let vertical = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Fill(1),
-                Constraint::Length(16),
-                Constraint::Fill(1),
-            ])
-            .split(area);
-
-        let popup_layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(20),
-                Constraint::Percentage(60),
-                Constraint::Percentage(20),
-            ])
-            .split(vertical[1]);
-
-        let popup_area = popup_layout[1];
-
-        f.render_widget(Clear, popup_area);
-
-        let popup_block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Connect ")
-            .style(Style::default().bg(Color::DarkGray));
-
-        let layout = Layout::default()
-            .direction(Direction::Vertical)
-            .margin(1)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Length(3),
-            ])
-            .split(popup_block.inner(popup_area));
-
-        f.render_widget(popup_block, popup_area);
-
-        let ip_style = if self.login_field_idx == 0 {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        let ip_text = Paragraph::new(self.login_ip.as_str())
-            .block(Block::default().borders(Borders::ALL).title(" Server IP "))
-            .style(ip_style);
-        f.render_widget(ip_text, layout[0]);
-
-        let user_style = if self.login_field_idx == 1 {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        let user_text = Paragraph::new(self.login_user.as_str())
-            .block(Block::default().borders(Borders::ALL).title(" Username "))
-            .style(user_style);
-        f.render_widget(user_text, layout[1]);
-
-        let pass_style = if self.login_field_idx == 2 {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        let masked_pass = self.login_pass.chars().map(|_| '*').collect::<String>();
-        let pass_text = Paragraph::new(masked_pass)
-            .block(Block::default().borders(Borders::ALL).title(" Password "))
-            .style(pass_style);
-        f.render_widget(pass_text, layout[2]);
-
-        if let Some(err) = &self.connection_error {
-            let error_text =
-                Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
-            f.render_widget(error_text, layout[3]);
-        } else {
-            let help_text = Paragraph::new("Tab to switch • Enter to connect • Esc to quit")
-                .style(Style::default().fg(Color::Gray));
-            f.render_widget(help_text, layout[3]);
-        }
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    fn render_chat(&mut self, f: &mut Frame) {
-        let input_height = self.get_input_height(f);
-        let frame_width = f.area().width.saturating_sub(2) as usize;
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(3), Constraint::Length(input_height)])
-            .split(f.area());
-
-        let mut total_lines = 0u16;
-        let mut message_lines = Vec::new();
-        for m in &self.messages {
-            let Some((text, color)) = ChatEvent::to_colored_string(m) else {
-                continue;
-            };
-
-            message_lines.push(Line::from(Span::styled(
-                text.clone(),
-                Style::default().fg(color),
-            )));
-
-            if frame_width > 0 {
-                let m_len = text.len();
-                let lines_for_this_msg = ((m_len.saturating_sub(1) / frame_width) + 1) as u16;
-                total_lines += lines_for_this_msg;
-            } else {
-                total_lines += 1;
+    /// Consumes an event and updates state.
+    pub fn handle_event(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::Input(key) => {
+                let action = Self::map_key_to_action(key);
+                self.dispatch_action(&action);
+            }
+            AppEvent::Network(msg) => {
+                self.process_network_message(msg);
+            }
+            AppEvent::Err(e) => {
+                self.handle_error(&e);
+            }
+            AppEvent::Tick => {}
+            AppEvent::LoginSuccess(tx) => {
+                self.chat.network = Some(NetworkClient::new(tx));
+                self.chat.username = self.login.user.clone();
+                self.global.screen = CurrentScreen::Chat;
+                self.ui.error_message = None;
+            }
+            AppEvent::LoginFailed(e) => {
+                self.ui.error_message = Some(format!("Connection failed: {e}"));
             }
         }
+    }
 
-        self.scroll_limit = total_lines;
+    const fn map_key_to_action(key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Esc => Action::Quit,
+            KeyCode::Enter => Action::Submit,
+            KeyCode::Backspace => Action::DeleteChar,
+            KeyCode::Char(c) => Action::EnterChar(c),
+            _ => Action::None,
+        }
+    }
 
-        let history_viewport_height = chunks[0].height.saturating_sub(2);
-        let max_scroll = total_lines.saturating_sub(history_viewport_height);
-        if self.scroll > max_scroll {
-            self.scroll = max_scroll;
+    fn dispatch_action(&mut self, action: &Action) {
+        if !matches!(action, Action::None) {
+            self.ui.error_message = None;
         }
 
-        let history_text = Text::from(message_lines);
-        let chat_history = Paragraph::new(history_text)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!(" Chat History - {} ", self.username))
-                    .border_style(Style::default().fg(Color::Cyan)),
-            )
-            .wrap(Wrap { trim: false })
-            .scroll((self.scroll, 0));
-
-        f.render_widget(chat_history, chunks[0]);
-
-        let input = Paragraph::new(self.input.as_str())
-            .style(Style::default().fg(Color::Yellow))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Message (Esc to quit) ")
-                    .border_style(Style::default().fg(Color::Green)),
-            )
-            .wrap(Wrap { trim: false });
-
-        f.render_widget(input, chunks[1]);
-
-        let (cursor_x, cursor_y) = self.get_cursor_position(f);
-        f.set_cursor_position((chunks[1].x + cursor_x + 1, chunks[1].y + cursor_y + 1));
+        match action {
+            Action::Quit => self.global.should_quit = true,
+            Action::EnterChar(c) => self.ui.input_buffer.push(*c),
+            Action::DeleteChar => {
+                let _ = self.ui.input_buffer.pop();
+            }
+            Action::Submit => self.handle_submit(),
+            Action::None => {}
+        }
     }
 
-    #[allow(clippy::cast_possible_truncation)]
-    const fn get_input_height(&self, f: &Frame) -> u16 {
-        let area = f.area();
-        let text_width = area.width.saturating_sub(2) as usize;
+    fn handle_submit(&mut self) {
+        let input = std::mem::take(&mut self.ui.input_buffer);
 
-        let input_lines = if text_width > 0 {
-            ((self.input.len() / text_width) as u16) + 1
-        } else {
-            1
-        };
-
-        input_lines + 2
+        match self.global.screen {
+            CurrentScreen::Login => self.handle_login_submit(input),
+            CurrentScreen::Chat => self.handle_chat_submit(input),
+        }
     }
 
-    #[allow(clippy::cast_possible_truncation)]
-    const fn get_cursor_position(&self, f: &Frame) -> (u16, u16) {
-        let area = f.area();
-        let text_width = area.width.saturating_sub(2) as usize;
+    fn handle_login_submit(&mut self, input: String) {
+        if input.trim().is_empty() {
+            return;
+        }
 
-        let cursor_x = if text_width > 0 {
-            (self.input.len() % text_width) as u16
-        } else {
-            0
-        };
-        let cursor_y = if text_width > 0 {
-            (self.input.len() / text_width) as u16
-        } else {
-            0
-        };
-
-        (cursor_x, cursor_y)
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    fn calculate_height(events: &[ChatEvent], width: u16) -> u16 {
-        let mut total_lines = 0;
-        for event in events {
-            if let Some((text, _)) = event.to_colored_string() {
-                let m_len = text.len();
-                if width > 0 {
-                    let lines = ((m_len.saturating_sub(1) / width as usize) + 1) as u16;
-                    total_lines += lines;
-                }
+        match self.login.step {
+            LoginStep::Ip => {
+                self.login.ip = input;
+                self.login.step = LoginStep::Username;
+            }
+            LoginStep::Username => {
+                self.login.user = input;
+                self.login.step = LoginStep::Password;
+            }
+            LoginStep::Password => {
+                let password = input;
+                self.connect_to_server(password);
             }
         }
-        total_lines
+    }
+
+    fn connect_to_server(&mut self, password: String) {
+        self.ui.error_message = Some("Connecting...".to_string());
+
+        let ip = self.login.ip.clone();
+        let user = self.login.user.clone();
+        let event_tx = self.global.event_tx.clone();
+
+        tokio::spawn(async move {
+            match NetworkClient::connect(&ip, event_tx.clone()).await {
+                Ok(client) => {
+                    let join_packet = Message::Join(JoinPacket {
+                        username: user,
+                        password,
+                    });
+
+                    if let Err(e) = client.send(join_packet) {
+                        let _ =
+                            event_tx.send(AppEvent::LoginFailed(format!("Handshake failed: {e}")));
+                        return;
+                    }
+
+                    let _ = event_tx.send(AppEvent::LoginSuccess(client.into_inner()));
+                }
+                Err(e) => {
+                    let _ = event_tx.send(AppEvent::LoginFailed(e.to_string()));
+                }
+            }
+        });
+    }
+
+    fn handle_chat_submit(&mut self, input: String) {
+        if input.trim().is_empty() {
+            return;
+        }
+
+        if let Some(network) = &self.chat.network {
+            let packet = ChatPacket::new_user_packet(self.chat.username.clone(), input);
+            let msg = Message::Chat(packet);
+
+            if let Err(e) = network.send(msg) {
+                self.handle_error(&e);
+            }
+        } else {
+            self.ui.error_message = Some("Disconnected from server".to_string());
+        }
+    }
+
+    fn process_network_message(&mut self, msg: Message) {
+        match msg {
+            Message::Chat(packet) => {
+                self.push_message(packet);
+            }
+            Message::HistoryResponse(history) => {
+                for packet in history {
+                    self.push_message(packet);
+                }
+            }
+            Message::Error(e) => {
+                self.ui.error_message = Some(format!("Server error: {e}"));
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_error(&mut self, err: &Error) {
+        match err {
+            Error::Disconnected => {
+                self.ui.error_message = Some("Connection lost. Press Esc to quit".to_string());
+                self.chat.network = None;
+                self.global.screen = CurrentScreen::Login;
+            }
+            _ => {
+                self.ui.error_message = Some(format!("Error: {err}"));
+            }
+        }
+    }
+
+    fn push_message(&mut self, packet: ChatPacket) {
+        if self.chat.messages.len() >= MAX_MESSAGES {
+            self.chat.messages.pop_front();
+        }
+        self.chat.messages.push_back(packet);
     }
 }
