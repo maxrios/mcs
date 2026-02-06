@@ -63,5 +63,5 @@ docker compose up --build
 
 ### **5. Running the Client**
 ```
-cargo run -p client <username>
+cargo run -p client
 ```
