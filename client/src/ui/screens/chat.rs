@@ -26,7 +26,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         &mut app.chat.history_request_timestamp,
     );
 
-    input::draw(f, chunks[1], "Message", &app.ui.input_buffer, true);
+    input::draw(
+        f,
+        chunks[1],
+        "Message (Esc to quit)",
+        &app.ui.input_buffer,
+        true,
+    );
     f.set_cursor_position((
         chunks[1].x + 1 + app.ui.input_buffer.len() as u16,
         chunks[1].y + 1,
