@@ -8,7 +8,10 @@ A networking project to learn Rust🦀
 ## **Setting up Project**
 This project uses TLS 1.2/1.3 for secure communication. Before running the application, you must generate self-signed certificates.
 
-### **1. Create Config File**
+### **1. Set environment variables**
+Rename the `.env.example` to `.env` and, optionally, replace with your own values.
+
+### **2. Create Config File**
 ```
 mkdir tls && cd tls
 ```
@@ -34,7 +37,7 @@ IP.1 = 127.0.0.1
 IP.2 = 0.0.0.0
 ```
 
-### **2. Generate Keys and Certificates:**
+### **3. Generate Keys and Certificates:**
 ```
 openssl genrsa -out ca.key 2048
 
@@ -50,7 +53,7 @@ openssl x509 -req -in server.csr -CA ca.cert -CAkey ca.key -CAcreateserial \
 ```
 If you're running your client on a separate machine, make sure to copy the `ca.cert` into the client repo `tls` directory.
 
-### **3. Running the Server**
+### **4. Running the Server**
 ```
 cd ..
 
@@ -58,7 +61,7 @@ docker compose up --build
 ```
 
 
-### **4. Running the Client**
+### **5. Running the Client**
 ```
 cargo run -p client <username>
 ```
