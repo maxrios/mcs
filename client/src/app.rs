@@ -17,6 +17,10 @@ pub enum Action {
     Submit,
     /// User closes the app.
     Quit,
+    /// User scrolls up.
+    ScrollUp,
+    /// User scrolls down.
+    ScrollDown,
     None,
 }
 
@@ -48,12 +52,16 @@ pub struct ChatState {
     pub messages: VecDeque<ChatPacket>,
     pub network: Option<NetworkClient>,
     pub username: String,
+    pub scroll_offset: u16,
+    pub should_request_history: bool,
+    pub history_request_timestamp: Option<i64>,
 }
 
 pub struct LoginState {
     pub step: LoginStep,
     pub ip: String,
     pub user: String,
+    pub pass: String,
 }
 
 pub struct App {
@@ -79,11 +87,15 @@ impl App {
                 messages: VecDeque::with_capacity(MAX_MESSAGES),
                 network: None,
                 username: String::new(),
+                scroll_offset: 0,
+                should_request_history: false,
+                history_request_timestamp: None,
             },
             login: LoginState {
                 step: LoginStep::Ip,
                 ip: String::new(),
                 user: String::new(),
+                pass: String::new(),
             },
         }
     }
@@ -120,6 +132,8 @@ impl App {
             KeyCode::Enter => Action::Submit,
             KeyCode::Backspace => Action::DeleteChar,
             KeyCode::Char(c) => Action::EnterChar(c),
+            KeyCode::Up | KeyCode::PageUp | KeyCode::BackTab => Action::ScrollUp,
+            KeyCode::Down | KeyCode::PageDown | KeyCode::Tab => Action::ScrollDown,
             _ => Action::None,
         }
     }
@@ -136,42 +150,95 @@ impl App {
                 let _ = self.ui.input_buffer.pop();
             }
             Action::Submit => self.handle_submit(),
+            Action::ScrollUp => match self.global.screen {
+                CurrentScreen::Login => self.prev_login_field(),
+                CurrentScreen::Chat => {
+                    self.chat.scroll_offset = self.chat.scroll_offset.saturating_add(1);
+                    if self.chat.should_request_history {
+                        self.get_history();
+                    }
+                }
+            },
+            Action::ScrollDown => match self.global.screen {
+                CurrentScreen::Login => self.next_login_field(),
+                CurrentScreen::Chat => {
+                    self.chat.scroll_offset = self.chat.scroll_offset.saturating_sub(1);
+                }
+            },
             Action::None => {}
         }
     }
 
-    fn handle_submit(&mut self) {
-        let input = std::mem::take(&mut self.ui.input_buffer);
+    fn get_history(&mut self) {
+        if let Some(timestamp) = self.chat.history_request_timestamp
+            && let Some(client) = &self.chat.network
+        {
+            let history_request = Message::HistoryRequest(timestamp);
+            if let Err(e) = client.send(history_request) {
+                self.handle_error(&e);
+            }
+        }
+        self.chat.should_request_history = false;
+        self.chat.history_request_timestamp = None;
+    }
 
-        match self.global.screen {
-            CurrentScreen::Login => self.handle_login_submit(input),
-            CurrentScreen::Chat => self.handle_chat_submit(input),
+    fn next_login_field(&mut self) {
+        match self.login.step {
+            LoginStep::Ip => self.change_login_step(LoginStep::Username),
+            LoginStep::Username => self.change_login_step(LoginStep::Password),
+            LoginStep::Password => {}
         }
     }
 
-    fn handle_login_submit(&mut self, input: String) {
-        if input.trim().is_empty() {
-            return;
+    fn prev_login_field(&mut self) {
+        match self.login.step {
+            LoginStep::Ip => {}
+            LoginStep::Username => self.change_login_step(LoginStep::Ip),
+            LoginStep::Password => self.change_login_step(LoginStep::Username),
+        }
+    }
+
+    /// Centralizes the logic for switching fields to ensure data isn't lost.
+    fn change_login_step(&mut self, target: LoginStep) {
+        match self.login.step {
+            LoginStep::Ip => self.login.ip = self.ui.input_buffer.clone(),
+            LoginStep::Username => self.login.user = self.ui.input_buffer.clone(),
+            LoginStep::Password => self.login.pass = self.ui.input_buffer.clone(),
         }
 
+        self.login.step = target;
+
+        self.ui.input_buffer = match self.login.step {
+            LoginStep::Ip => self.login.ip.clone(),
+            LoginStep::Username => self.login.user.clone(),
+            LoginStep::Password => self.login.pass.clone(),
+        };
+    }
+
+    fn handle_submit(&mut self) {
+        match self.global.screen {
+            CurrentScreen::Login => self.handle_login_submit(),
+            CurrentScreen::Chat => {
+                let input = std::mem::take(&mut self.ui.input_buffer);
+                self.handle_chat_submit(input);
+            }
+        }
+    }
+
+    fn handle_login_submit(&mut self) {
         match self.login.step {
-            LoginStep::Ip => {
-                self.login.ip = input;
-                self.login.step = LoginStep::Username;
-            }
-            LoginStep::Username => {
-                self.login.user = input;
-                self.login.step = LoginStep::Password;
-            }
+            LoginStep::Ip | LoginStep::Username => self.next_login_field(),
             LoginStep::Password => {
-                let password = input;
-                self.connect_to_server(password);
+                self.login.pass = self.ui.input_buffer.clone();
+                let pass = self.login.pass.clone();
+                self.connect_to_server(pass);
             }
         }
     }
 
     fn connect_to_server(&mut self, password: String) {
         self.ui.error_message = Some("Connecting...".to_string());
+        self.ui.input_buffer = String::new();
 
         let ip = self.login.ip.clone();
         let user = self.login.user.clone();
@@ -211,6 +278,8 @@ impl App {
 
             if let Err(e) = network.send(msg) {
                 self.handle_error(&e);
+            } else {
+                self.chat.scroll_offset = 0;
             }
         } else {
             self.ui.error_message = Some("Disconnected from server".to_string());
@@ -219,14 +288,8 @@ impl App {
 
     fn process_network_message(&mut self, msg: Message) {
         match msg {
-            Message::Chat(packet) => {
-                self.push_message(packet);
-            }
-            Message::HistoryResponse(history) => {
-                for packet in history {
-                    self.push_message(packet);
-                }
-            }
+            Message::Chat(packet) => self.push_message(packet),
+            Message::HistoryResponse(history) => self.push_history_messages(history),
             Message::Error(e) => {
                 self.ui.error_message = Some(format!("Server error: {e}"));
             }
@@ -244,6 +307,12 @@ impl App {
             _ => {
                 self.ui.error_message = Some(format!("Error: {err}"));
             }
+        }
+    }
+
+    fn push_history_messages(&mut self, history: Vec<ChatPacket>) {
+        for packet in history.into_iter().rev() {
+            self.chat.messages.push_front(packet);
         }
     }
 
