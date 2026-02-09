@@ -2,33 +2,28 @@
 
 use futures::{SinkExt, StreamExt};
 use protocol::{ChatPacket, JoinPacket, McsCodec, Message};
-use rustls::{ServerConfig, crypto::ring};
+use rustls::ServerConfig;
 use rustls_pemfile::{certs, pkcs8_private_keys};
-use rustls_pki_types::{CertificateDer, PrivateKeyDer};
-use state::ChatServer;
-use std::{env, fs::File, io::BufReader, sync::Arc, time::Duration};
-use tokio::{
-    io::{AsyncRead, AsyncWrite, split},
-    net::TcpListener,
-};
+use std::{fs::File, io::BufReader, sync::Arc};
+use tokio::{io::split, net::TcpListener};
 use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tracing::{error, info, warn};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-mod db;
+mod config;
 mod error;
-mod redis;
-mod state;
+mod repository;
+mod service;
+mod transport;
 
-use crate::{
-    error::{Error, Result},
-    redis::Redis,
-};
+use config::Config;
+use error::Error;
+use service::AppState;
+use transport::session::ClientSession;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -37,241 +32,101 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    if ring::default_provider().install_default().is_err() {
-        warn!("crypto provider already exists");
-    }
-
-    let host = "0.0.0.0:64400";
-    let database_url = env::var("POSTGRES_URL")
-        .unwrap_or_else(|_| "postgres://postgres:password@localhost:5432/postgres".to_string());
-    let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-
-    let certs = match load_certs("tls/server.cert") {
-        Ok(certs) => certs,
-        Err(e) => {
-            error!(%e, "failed to load certs");
-            return;
-        }
-    };
-    let keys = match load_keys("tls/server.key") {
-        Ok(keys) => keys,
-        Err(e) => {
-            error!(%e, "failed to load keys");
-            return;
-        }
-    };
-    let tls_config = match ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, keys)
-    {
-        Ok(config) => config,
-        Err(e) => {
-            error!(%e, "failed to set single cert and match private keys");
-            return;
-        }
-    };
-
+    let config = Config::load();
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let tls_config = load_tls_config(&config.tls_cert_path, &config.tls_key_path)?;
     let acceptor = TlsAcceptor::from(Arc::new(tls_config));
+    let addr = format!("{}:{}", config.hostname, config.port);
+    let state: AppState = AppState::new(&config.db_url, &config.redis_url, addr.clone()).await?;
+    state.node.register().await?;
+    state.node.start_heartbeat();
 
-    let server = match ChatServer::new(&database_url, &redis_url).await {
-        Ok(server) => Arc::new(server),
-        Err(e) => {
-            error!(%e, "failed to initilize database");
-            return;
-        }
-    };
-
-    if let Err(e) = server.db.create_user("admin", "password").await {
-        warn!(err = ?e, "failed to seed admin user");
-    }
-
-    spawn_heartbeat(server.redis.clone());
-
-    let listener = match TcpListener::bind(host).await {
-        Ok(listener) => {
-            info!(%host, "server running");
-            listener
-        }
-        Err(e) => {
-            error!(%e, "server failed to bind to host");
-            return;
-        }
-    };
+    let listener = TcpListener::bind(&addr).await?;
+    info!(%addr, "server running");
 
     loop {
         let (socket, addr) = match listener.accept().await {
-            Ok((socket, addr)) => (socket, addr),
+            Ok(v) => v,
             Err(e) => {
-                warn!(%e, "connection failed");
+                warn!(err=?e, "failed to accept new connection");
                 continue;
             }
         };
 
         let acceptor = acceptor.clone();
-        let server_ref = Arc::clone(&server);
+        let state = state.clone();
 
         tokio::spawn(async move {
+            info!(ip=%addr.ip(), "accepting new connection");
+
             let stream = match acceptor.accept(socket).await {
-                Ok(stream) => stream,
+                Ok(s) => s,
                 Err(e) => {
-                    error!(%e, "TLS handshake failed");
+                    warn!(ip=%addr.ip(), err=?e, "TLS handshake failed");
                     return;
                 }
             };
 
             let (reader, writer) = split(stream);
-
             let mut framed_reader = FramedRead::new(reader, McsCodec);
             let mut framed_writer = FramedWrite::new(writer, McsCodec);
-
             if let Some(Ok(Message::Join(JoinPacket { username, password }))) =
                 framed_reader.next().await
-                && handle_registration(&server_ref, &mut framed_writer, &username, &password)
-                    .await
-                    .is_ok()
             {
-                info!(ip = %addr.ip(), port = %addr.port(), username = %username, "connected user");
-                handle_session(&username, framed_reader, framed_writer, server_ref).await;
+                match state.auth.register_and_login(&username, &password).await {
+                    Ok(()) => {
+                        info!(user=%username, "user authenticated");
+
+                        let join_msg = match state
+                            .chat
+                            .broadcast_system_message(format!("{username} joined.\n"))
+                            .await
+                        {
+                            Ok(p) => p,
+                            Err(e) => {
+                                warn!(err=?e, "failed to broadcast join message");
+                                ChatPacket::new_server_packet(String::new())
+                            }
+                        };
+
+                        match state.chat.get_history(join_msg.timestamp + 1).await {
+                            Ok(history) => {
+                                let _ = framed_writer.send(Message::HistoryResponse(history)).await;
+                            }
+                            Err(e) => {
+                                error!(err=?e, "failed to fetch history during join");
+                            }
+                        }
+
+                        let mut session =
+                            ClientSession::new(username, state, framed_reader, framed_writer);
+                        session.run().await;
+                    }
+                    Err(e) => {
+                        warn!(user=%username, err=?e, "failed to authenticate user");
+                        let _ = framed_writer.send(Message::Error(e.to_chat_error())).await;
+                    }
+                }
+            } else {
+                warn!(ip=%addr.ip(), "protocol violation: expected join packet");
             }
         });
     }
 }
 
-async fn handle_registration<W>(
-    server: &Arc<ChatServer>,
-    writer: &mut FramedWrite<W, McsCodec>,
-    username: &str,
-    password: &str,
-) -> Result<()>
-where
-    W: AsyncWrite + Unpin + Send + Sync + 'static,
-{
-    match server.register_user(username, password).await {
-        Ok(()) => {
-            let join_message = ChatPacket::new_server_packet(format!("{username} joined.\n"));
-            let join_message_time = join_message.timestamp;
-            server.broadcast(join_message).await?;
+fn load_tls_config(cert_path: &str, key_path: &str) -> Result<ServerConfig, Error> {
+    let cert_file = File::open(cert_path)?;
+    let mut cert_reader = BufReader::new(cert_file);
+    let certs = certs(&mut cert_reader).collect::<Result<Vec<_>, _>>()?;
 
-            let history = server.get_history(join_message_time + 1).await?;
-            if let Err(e) = writer.send(Message::HistoryResponse(history)).await {
-                warn!(%e, "failed to notify user of error");
-            }
+    let key_file = File::open(key_path)?;
+    let mut key_reader = BufReader::new(key_file);
+    let key = pkcs8_private_keys(&mut key_reader).next().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "no private key found")
+    })??;
 
-            Ok(())
-        }
-        Err(e) => {
-            let _ = writer.send(Message::Error(e.to_chat_error())).await;
-            Err(e)
-        }
-    }
-}
-
-async fn handle_session<R, W>(
-    name: &str,
-    mut reader: FramedRead<R, McsCodec>,
-    mut writer: FramedWrite<W, McsCodec>,
-    server: Arc<ChatServer>,
-) where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    let mut rx = server.subscribe();
-
-    loop {
-        tokio::select! {
-            result = reader.next() => {
-                match result {
-                    Some(Ok(msg)) => match msg {
-                        Message::Chat(text) => {
-                            if let Err(e) = server.broadcast(text).await {
-                                if let Err(e2) = writer.send(Message::Error(e.to_chat_error())).await {
-                                    warn!(%e2, "failed to notify user of error");
-                                }
-                                error!(%e, "broadcast error");
-                            }
-                        },
-                        Message::Heartbeat => {
-                            if let Err(e) = server.heartbeat(name).await {
-                                error!(%e, "redis error");
-                            }
-                        }
-                        Message::HistoryRequest(timestamp) => {
-                            match server.get_history(timestamp).await {
-                                Ok(history) => {
-                                    if let Err(e) = writer.send(Message::HistoryResponse(history)).await {
-                                        warn!(%e, "failed to send history");
-                                    }
-                                }
-                                Err(e) => {
-                                    if let Err(e2) = writer.send(Message::Error(e.to_chat_error())).await {
-                                        warn!(%e2, "failed to notify user of error");
-                                    }
-                                    error!(%e, "broadcast error");
-                                }
-                            }
-                        }
-                        _ => break
-                    }
-                    _ => break
-                }
-            }
-            Ok(msg) = rx.recv() => {
-                if writer.send(msg).await.is_err() {
-                    break;
-                }
-            }
-        }
-    }
-    if let Err(e) = server.remove_user(name).await {
-        error!(%e, "failed to remove user");
-    }
-
-    if let Err(e) = server
-        .broadcast(ChatPacket::new_server_packet(format!("{name} left.\n")))
-        .await
-    {
-        error!(%e, "failed to broadcast user leave");
-    }
-}
-
-fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(e) => return Err(Error::IO(e)),
-    };
-    let mut reader = BufReader::new(file);
-    Ok(certs(&mut reader).map(|result| result.unwrap()).collect())
-}
-
-fn load_keys(path: &str) -> Result<PrivateKeyDer<'static>> {
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(e) => return Err(Error::IO(e)),
-    };
-    let mut reader = BufReader::new(file);
-    Ok(pkcs8_private_keys(&mut reader)
-        .next()
-        .unwrap()
-        .unwrap()
-        .into())
-}
-
-fn spawn_heartbeat(redis: Redis) {
-    tokio::spawn(async move {
-        let ip = match local_ip_address::local_ip() {
-            Ok(ip) => ip,
-            Err(e) => {
-                error!(%e, "failed to get ip for heartbeat");
-                return;
-            }
-        };
-        let addr = format!("{ip}:64400");
-        let mut interval = tokio::time::interval(Duration::from_secs(2));
-        loop {
-            interval.tick().await;
-            if let Err(e) = redis.register_node(&addr).await {
-                error!(%e, "failed to register node heartbeat");
-            }
-        }
-    });
+    rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key.into())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e).into())
 }

@@ -35,6 +35,9 @@ pub enum Error {
 
     #[error("hashing error: {0}")]
     Hashing(#[from] argon2::password_hash::Error),
+
+    #[error("migration error: {0}")]
+    Migration(#[from] sqlx::migrate::MigrateError),
 }
 
 impl Error {

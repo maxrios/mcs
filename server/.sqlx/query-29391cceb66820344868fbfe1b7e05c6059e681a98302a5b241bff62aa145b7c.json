@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO messages (sender, content, timestamp)\n              VALUES ($1, $2, $3)",
+  "query": "INSERT INTO messages (sender, content, timestamp) VALUES ($1, $2, $3)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -12,5 +12,5 @@
     },
     "nullable": []
   },
-  "hash": "081d8d8562fa1c599f76af1bf5885c422b37a229b83850f9f2d5ee1370df97d3"
+  "hash": "29391cceb66820344868fbfe1b7e05c6059e681a98302a5b241bff62aa145b7c"
 }

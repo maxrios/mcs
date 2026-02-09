@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT sender, content, timestamp\n              FROM messages WHERE timestamp < $1\n              ORDER BY timestamp DESC LIMIT 50",
+  "query": "SELECT sender, content, timestamp FROM messages\n            WHERE timestamp < $1::BIGINT\n            ORDER BY timestamp DESC LIMIT 50",
   "describe": {
     "columns": [
       {
@@ -30,5 +30,5 @@
       false
     ]
   },
-  "hash": "3a3bef029df1d74d4bd76a8685e25e5823f663bf23ee13fa9cba2a169fef8be5"
+  "hash": "077307e0451524b2c87a214bdb4891818752015eb74c6d7a8d0e19f4e6a7c839"
 }
