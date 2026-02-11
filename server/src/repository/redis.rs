@@ -1,6 +1,7 @@
 use super::PresenceRepository;
 use crate::error::Result;
 use async_trait::async_trait;
+use chrono::Utc;
 use futures::StreamExt;
 use protocol::Message;
 use redis::Client;
@@ -94,13 +95,13 @@ impl PresenceRepository for RedisRepository {
     }
 
     async fn register_node(&self, address: &str) -> Result<()> {
-        let key = format!("mcs:node:{address}");
         let mut conn = self.conn.clone();
-        redis::cmd("SET")
-            .arg(&key)
-            .arg("online")
-            .arg("EX")
-            .arg(5)
+        let timestamp = Utc::now().timestamp();
+
+        redis::cmd("ZADD")
+            .arg("mcs:node")
+            .arg(timestamp)
+            .arg(address)
             .query_async::<()>(&mut conn)
             .await?;
 

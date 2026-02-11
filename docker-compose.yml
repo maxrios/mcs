@@ -8,6 +8,9 @@ services:
       REDIS_URL: $REDIS_URL
     ports:
       - "${MCS_PORT}:${MCS_PORT}"
+      - "${PROMETHEUS_PORT}:${PROMETHEUS_PORT}"
+    volumes:
+      - ./tls:/app/tls
     depends_on:
       - server
     networks:
@@ -31,8 +34,6 @@ services:
       dockerfile: Dockerfile.server
     deploy:
       replicas: 2
-    volumes:
-      - ./tls:/app/tls
     environment:
       POSTGRES_URL: $POSTGRES_URL
       REDIS_URL: $REDIS_URL
