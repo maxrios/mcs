@@ -7,6 +7,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod config;
 mod core;
+mod rate_limiter;
 mod state;
 
 #[tokio::main]

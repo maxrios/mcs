@@ -1,4 +1,5 @@
-use crate::state::LbState;
+use crate::rate_limiter::RateLimitedStream;
+use crate::state::lb::LoadBalancerState;
 use anyhow::Context;
 use anyhow::Result;
 use metrics::counter;
@@ -20,7 +21,7 @@ use tokio_rustls::server::TlsStream;
 use tracing::{error, info, warn};
 
 pub struct LoadBalancer {
-    state: LbState,
+    state: LoadBalancerState,
     redis_url: String,
     bind_addr: String,
     tls_acceptor: TlsAcceptor,
@@ -42,7 +43,7 @@ impl LoadBalancer {
         let tls_acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
         Self {
-            state: LbState::new(),
+            state: LoadBalancerState::new(),
             redis_url,
             bind_addr,
             tls_acceptor,
@@ -63,16 +64,33 @@ impl LoadBalancer {
 
         let listener = TcpListener::bind(&self.bind_addr).await?;
         info!("lb listening on {}", self.bind_addr);
+        self.state.spawn_client_cleanup();
 
         loop {
             let (client_socket, client_addr) = listener.accept().await?;
-            let state = self.state.clone();
+            let ip = client_addr.ip();
+            let lb_state = self.state.clone();
+            let client_state = lb_state.add_client(ip);
+
+            client_state.update_seen();
+            if client_state.connection_limiter.check().is_err() {
+                warn!(%ip, "connection rate limit exceeded");
+                continue;
+            }
+
             let acceptor = self.tls_acceptor.clone();
 
             tokio::spawn(async move {
                 match acceptor.accept(client_socket).await {
                     Ok(tls_stream) => {
-                        if let Err(e) = Self::handle_connection(state, tls_stream).await {
+                        let limited_client_socket = RateLimitedStream::new(
+                            tls_stream,
+                            client_state.bandwidth_limiter.clone(),
+                        );
+
+                        if let Err(e) =
+                            Self::handle_connection(lb_state, limited_client_socket).await
+                        {
                             warn!(%client_addr, err=?e, "failed to establish connection")
                         }
                     }
@@ -83,8 +101,8 @@ impl LoadBalancer {
     }
 
     async fn handle_connection(
-        state: LbState,
-        mut client_socket: TlsStream<TcpStream>,
+        state: LoadBalancerState,
+        mut limited_client_socket: RateLimitedStream<TlsStream<TcpStream>>,
     ) -> Result<()> {
         counter!("lb_total_connections").increment(1);
 
@@ -98,14 +116,15 @@ impl LoadBalancer {
         let mut server_socket = TcpStream::connect(&backend_addr).await?;
         state.inc_backend_connection(&backend_addr).await;
 
-        let result = tokio::io::copy_bidirectional(&mut client_socket, &mut server_socket).await;
+        let result =
+            tokio::io::copy_bidirectional(&mut limited_client_socket, &mut server_socket).await;
         state.dec_backend_connection(&backend_addr).await;
 
         let _ = result?;
         Ok(())
     }
 
-    async fn discovery_task(state: LbState, redis_url: String) {
+    async fn discovery_task(state: LoadBalancerState, redis_url: String) {
         let client = match redis::Client::open(redis_url) {
             Ok(c) => c,
             Err(e) => {
@@ -157,7 +176,7 @@ impl LoadBalancer {
         }
     }
 
-    async fn health_check_task(state: LbState) {
+    async fn health_check_task(state: LoadBalancerState) {
         let mut interval = time::interval(Duration::from_secs(3));
 
         loop {
@@ -193,7 +212,6 @@ impl LoadBalancer {
         let file = File::open(path).context(format!("failed to open {}", path))?;
         let mut reader = BufReader::new(file);
 
-        // Loop through the file to find ANY valid key format
         loop {
             match read_one(&mut reader)? {
                 Some(Item::Pkcs1Key(key)) => return Ok(key.into()),

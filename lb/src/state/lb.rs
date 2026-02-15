@@ -1,6 +1,13 @@
+use crate::state::ClientState;
+use dashmap::DashMap;
+use governor::Quota;
 use metrics::gauge;
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone)]
@@ -11,14 +18,16 @@ pub struct BackendState {
 }
 
 #[derive(Clone)]
-pub struct LbState {
+pub struct LoadBalancerState {
     backends: Arc<RwLock<HashMap<String, BackendState>>>,
+    pub clients: Arc<DashMap<IpAddr, Arc<ClientState>>>,
 }
 
-impl LbState {
+impl LoadBalancerState {
     pub fn new() -> Self {
         Self {
             backends: Arc::new(RwLock::new(HashMap::new())),
+            clients: Arc::new(DashMap::new()),
         }
     }
 
@@ -77,5 +86,35 @@ impl LbState {
                 .set(b.active_connections as f64);
             gauge!("lb_active_connections").decrement(1);
         }
+    }
+
+    pub fn spawn_client_cleanup(&self) {
+        let clients = self.clients.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                let now = ClientState::now_ms();
+                // 5min ttl
+                let expiration = 1000 * 60 * 5;
+                clients.retain(|_, state| {
+                    let last_seen = state.last_seen_ms.load(Ordering::Relaxed);
+                    now - last_seen < expiration
+                });
+            }
+        });
+    }
+
+    pub fn add_client(&self, ip: IpAddr) -> Arc<ClientState> {
+        self.clients
+            .entry(ip)
+            .or_insert_with(|| unsafe {
+                let connection_quota = Quota::per_second(NonZeroU32::new_unchecked(5));
+                let bandwidth_quota = Quota::per_second(NonZeroU32::new_unchecked(100 * 1024))
+                    .allow_burst(NonZeroU32::new_unchecked(16 * 1024));
+
+                Arc::new(ClientState::new(connection_quota, bandwidth_quota))
+            })
+            .clone()
     }
 }
