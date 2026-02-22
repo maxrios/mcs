@@ -2,13 +2,11 @@ use crate::state::ClientState;
 use dashmap::DashMap;
 use governor::Quota;
 use metrics::gauge;
-use std::collections::HashMap;
 use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use tokio::sync::RwLock;
 
 #[derive(Debug, Clone)]
 pub struct BackendState {
@@ -19,30 +17,28 @@ pub struct BackendState {
 
 #[derive(Clone)]
 pub struct LoadBalancerState {
-    backends: Arc<RwLock<HashMap<String, BackendState>>>,
+    backends: Arc<DashMap<String, BackendState>>,
     pub clients: Arc<DashMap<IpAddr, Arc<ClientState>>>,
 }
 
 impl LoadBalancerState {
     pub fn new() -> Self {
         Self {
-            backends: Arc::new(RwLock::new(HashMap::new())),
+            backends: Arc::new(DashMap::new()),
             clients: Arc::new(DashMap::new()),
         }
     }
 
     pub async fn next_backend(&self) -> Option<String> {
-        let backends = self.backends.read().await;
-        backends
-            .values()
+        self.backends
+            .iter()
             .filter(|b| b.is_healthy)
             .min_by_key(|b| b.active_connections)
             .map(|b| b.addr.clone())
     }
 
     pub async fn add_backend(&self, addr: String, active_connections: usize) {
-        let mut lock = self.backends.write().await;
-        lock.insert(
+        self.backends.insert(
             addr.clone(),
             BackendState {
                 addr,
@@ -51,27 +47,26 @@ impl LoadBalancerState {
             },
         );
 
-        gauge!("lb_healthy_backends").set(lock.len() as f64)
+        gauge!("lb_healthy_backends").set(self.backends.len() as f64)
     }
 
     pub async fn remove_backend(&self, addr: &str) {
-        let mut lock = self.backends.write().await;
-        lock.remove(addr);
-        gauge!("lb_healthy_backends").set(lock.len() as f64)
+        gauge!("lb_healthy_backends").set(self.backends.len() as f64);
+        self.backends.remove(addr);
     }
 
     pub async fn get_backend_addrs(&self) -> Vec<String> {
-        self.backends.read().await.keys().cloned().collect()
+        self.backends.iter().map(|r| (*r.key()).clone()).collect()
     }
 
     pub async fn set_health(&self, addr: &str, is_healthy: bool) {
-        if let Some(b) = self.backends.write().await.get_mut(addr) {
+        if let Some(mut b) = self.backends.get_mut(addr) {
             b.is_healthy = is_healthy;
         }
     }
 
     pub async fn inc_backend_connection(&self, addr: &str) {
-        if let Some(b) = self.backends.write().await.get_mut(addr) {
+        if let Some(mut b) = self.backends.get_mut(addr) {
             b.active_connections += 1;
             gauge!("lb_backend_active_connections", "backend" => addr.to_string())
                 .set(b.active_connections as f64);
@@ -80,7 +75,7 @@ impl LoadBalancerState {
     }
 
     pub async fn dec_backend_connection(&self, addr: &str) {
-        if let Some(b) = self.backends.write().await.get_mut(addr) {
+        if let Some(mut b) = self.backends.get_mut(addr) {
             b.active_connections -= 1;
             gauge!("lb_backend_active_connections", "backend" => addr.to_string())
                 .set(b.active_connections as f64);
