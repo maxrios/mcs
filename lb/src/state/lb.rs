@@ -18,7 +18,7 @@ pub struct BackendState {
 #[derive(Clone)]
 pub struct LoadBalancerState {
     backends: Arc<DashMap<String, BackendState>>,
-    pub clients: Arc<DashMap<IpAddr, Arc<ClientState>>>,
+    clients: Arc<DashMap<IpAddr, Arc<ClientState>>>,
 }
 
 impl LoadBalancerState {
