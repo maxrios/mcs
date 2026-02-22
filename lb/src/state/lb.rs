@@ -8,14 +8,14 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-#[derive(Debug, Clone)]
-pub struct BackendState {
+#[derive(Debug)]
+struct BackendState {
     pub addr: String,
     pub active_connections: usize,
     pub is_healthy: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LoadBalancerState {
     backends: Arc<DashMap<String, BackendState>>,
     clients: Arc<DashMap<IpAddr, Arc<ClientState>>>,

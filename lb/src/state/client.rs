@@ -1,3 +1,8 @@
+use governor::{
+    Quota, RateLimiter,
+    clock::DefaultClock,
+    state::{InMemoryState, NotKeyed},
+};
 use std::{
     sync::{
         Arc,
@@ -6,12 +11,7 @@ use std::{
     time::SystemTime,
 };
 
-use governor::{
-    Quota, RateLimiter,
-    clock::DefaultClock,
-    state::{InMemoryState, NotKeyed},
-};
-
+#[derive(Debug)]
 pub struct ClientState {
     pub connection_limiter: RateLimiter<NotKeyed, InMemoryState, DefaultClock>,
     pub bandwidth_limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,

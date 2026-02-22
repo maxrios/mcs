@@ -1,23 +1,22 @@
 use crate::rate_limiter::RateLimitedStream;
 use crate::state::lb::LoadBalancerState;
-use anyhow::Context;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use metrics::counter;
 use redis::AsyncCommands;
 use rustls::ServerConfig;
-use rustls_pemfile::Item;
-use rustls_pemfile::certs;
-use rustls_pemfile::read_one;
+use rustls_pemfile::{Item, certs, read_one};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
-use std::fs::File;
-use std::io::BufReader;
-use std::sync::Arc;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{self, Duration};
-use tokio_rustls::TlsAcceptor;
-use tokio_rustls::server::TlsStream;
+use std::{
+    fs::File,
+    io::BufReader,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    time::{self, Duration},
+};
+use tokio_rustls::{TlsAcceptor, server::TlsStream};
 use tracing::{error, info, warn};
 
 pub struct LoadBalancer {
