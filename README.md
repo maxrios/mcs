@@ -1,7 +1,4 @@
 # **Max's Chat Service (MCS)**
-A networking project to learn Rust🦀
-
-
 <table><tr><td align="center"><img src="images/login.png" width="400"></td><td align="center"><img src="images/chat.png" width="400"></td></tr></table>
 
 
