@@ -103,10 +103,10 @@ impl LoadBalancerState {
     pub fn add_client(&self, ip: IpAddr) -> Arc<ClientState> {
         self.clients
             .entry(ip)
-            .or_insert_with(|| unsafe {
-                let connection_quota = Quota::per_second(NonZeroU32::new_unchecked(5));
-                let bandwidth_quota = Quota::per_second(NonZeroU32::new_unchecked(100 * 1024))
-                    .allow_burst(NonZeroU32::new_unchecked(16 * 1024));
+            .or_insert_with(|| {
+                let connection_quota = Quota::per_second(NonZeroU32::new(5).unwrap());
+                let bandwidth_quota = Quota::per_second(NonZeroU32::new(100 * 1024).unwrap())
+                    .allow_burst(NonZeroU32::new(16 * 1024).unwrap());
 
                 Arc::new(ClientState::new(connection_quota, bandwidth_quota))
             })
